@@ -1,0 +1,85 @@
+% Example figures for a lab report, made with the mriseq package.
+% Compile with pdflatex (mriseq.sty next to this file or installed).
+\documentclass{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{subcaption}
+\usepackage{mriseq}          % \usepackage[bw]{mriseq} for black and white
+\begin{document}
+
+\begin{figure}[htbp]
+  \centering
+  \SpinEchoDiagram[TE=10]
+  \caption{Spin-echo sequence. The $180^\circ$ pulse at TE/2 refocuses the
+    dephasing so that an echo forms at TE.}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \GradientEchoDiagram[flip label=$\alpha$, spoiler, equal areas]
+  \caption{Spoiled gradient-echo sequence. The shaded areas are equal: the
+    slice rephaser cancels the dephasing of the second half of the slice
+    selection, and the read prephaser is cancelled at the echo.}
+\end{figure}
+
+\begin{figure}[htbp]
+  \begin{subfigure}{0.48\linewidth}
+    \SpinEchoDiagram[rows={rf,gz,gy,gx,sig}]
+    \caption{Spin echo}
+  \end{subfigure}\hfill
+  \begin{subfigure}{0.48\linewidth}
+    \GradientEchoDiagram[rows={rf,gz,gy,gx,sig}]
+    \caption{Gradient echo}
+  \end{subfigure}
+  \caption{Diagrams in subfigures switch to a compact layout automatically.}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \InversionRecoveryDiagram[rows={rf,gz,gy,gx,sig,mz}, TI=300, T1=600]
+  \caption{Inversion recovery with a spin-echo read-out. The long inversion
+    time is cut (//).}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \EPIDiagram[kspace, rows={rf,gz,gy,gx,adc}]
+  \caption{Single-shot gradient-echo EPI with its $k$-space trajectory.}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \DiffusionSpinEchoDiagram
+  \caption{Diffusion-weighted spin echo ($b = 1000$\,s/mm$^2$).}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \SpinEchoDiagram[repetitions=3, TR=600, rows={rf,gz,gy,gx,sig,mz}]
+  \caption{Three repetitions of a spin-echo sequence. Each TR uses the next
+    phase-encoding step; the long pauses are cut.}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \SpinEchoDiagram[detailed, rows={rf,gz}, time=0:4.5, width=0.7\linewidth,
+                   annotate={}, markers=false]
+  \caption{Slice selection of the spin-echo sequence (mT/m and mT\,ms/m for a
+    5\,mm slice and a 2\,ms sinc pulse).}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \begin{mriseq}[rows={rf,gx,adc,sig}, ticks]
+    \rfpulse{center=1, dur=1, flip=90}
+    \gradient{gx}{start=1.7, flat=0.8, amp=-1, label=prephaser}
+    \gradient{gx}{center=5, flat=3.2, amp=0.5}
+    \readout{center=5, samples=32, dwell=0.1, kzero=5}
+    \fid{start=1.5, t2=0.4}
+    \echo{center=5, t2=0.5, cycles=2}
+    \marker[kind=echo, label={$k_x=0$}]{5}
+    \interval{1}{5}{TE}
+  \end{mriseq}
+  \caption{A hand-built diagram: frequency encoding of a gradient echo.}
+\end{figure}
+
+\end{document}

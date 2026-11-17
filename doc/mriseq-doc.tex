@@ -1,0 +1,759 @@
+\documentclass[11pt]{article}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[a4paper,margin=2.3cm]{geometry}
+\usepackage{mriseq}
+\usepackage{booktabs,array,tabularx,xltabular}
+\usepackage[most]{tcolorbox}
+\usepackage{subcaption}
+\usepackage[hidelinks]{hyperref}
+
+\tcbset{
+  mriseqex/.style={
+    enhanced, breakable, colback=white, colframe=black!20, boxrule=0.4pt, arc=1mm,
+    listing options={basicstyle=\ttfamily\small, columns=fullflexible, keepspaces,
+      keywordstyle=\color{black}, commentstyle=\color{black!55}},
+    left=4pt, right=4pt, segmentation style={black!20}}}
+\newtcblisting{example}{mriseqex}
+\newtcblisting{exampleonly}{mriseqex,listing only}
+
+\newcommand\pkg[1]{\textsf{#1}}
+\newcommand\cs[1]{\texttt{\textbackslash#1}}
+\newcommand\key[1]{\texttt{#1}}
+\newcommand\meta[1]{\ensuremath{\langle}\textit{#1}\ensuremath{\rangle}}
+\newcommand\marg[1]{\texttt{\{}\meta{#1}\texttt{\}}}
+\newcommand\oarg[1]{\texttt{[}\meta{#1}\texttt{]}}
+
+\title{\pkg{mriseq}: MRI pulse sequence diagrams with Ti\emph{k}Z\\[2pt]
+  \large Version 0.3.0}
+\author{Gabriel Lindeblad\\\small\url{https://github.com/Glindeb/mriseq}}
+\date{2026-11-17}
+
+\begin{document}
+\sloppy
+\maketitle
+
+\begin{abstract}\noindent
+\pkg{mriseq} draws magnetic resonance imaging (MRI) pulse sequence diagrams as
+vector graphics directly inside a \LaTeX{} document. It provides physically
+consistent ready-made spin-echo, gradient-echo, inversion-recovery, echo-planar
+(EPI) and turbo spin-echo diagrams
+computed from imaging parameters (TE, TR, TI, slice thickness, FOV, matrix,
+dwell time, ...), and a small set of building blocks (RF pulses, trapezoid
+gradients, phase-encoding tables, ADC windows, signals, free waveforms, markers
+and timing intervals) to draw any other sequence or any part of one.
+What is shown is configurable: the rows, the time window, which timings are
+marked, and whether numbers and a time axis are printed. It ships with a colour
+style, a black-and-white style and a grayscale style, and you can define your own.
+\end{abstract}
+
+\begin{center}
+\begin{minipage}{0.9\linewidth}\small
+\textbf{Notice on the use of generative AI.} This package, its documentation and
+its examples were developed with substantial assistance from a generative AI tool
+(Claude Code, by Anthropic), under the direction of the author. The author is
+responsible for the content. Please check the diagrams you publish and report
+errors at \url{https://github.com/Glindeb/mriseq/issues}.
+\end{minipage}
+\end{center}
+
+\tableofcontents
+
+% =====================================================================
+\section{Quick start}
+
+\begin{exampleonly}
+\usepackage{mriseq}            % or \usepackage[bw]{mriseq}
+...
+\begin{figure}
+  \centering
+  \SpinEchoDiagram
+  \caption{Spin-echo pulse sequence.}
+\end{figure}
+\end{exampleonly}
+
+\begin{example}
+\SpinEchoDiagram
+\end{example}
+
+Add \key{detailed} for numbers, a time axis in ms and a light grid. The
+numbers are computed from the imaging parameters (here the defaults:
+5\,mm slice, 240\,mm FOV, $64\times64$ matrix, 50\,\textmu s dwell time,
+2\,ms sinc pulses with time--bandwidth product 4):
+\begin{example}
+\SpinEchoDiagram[detailed, rows={rf,gz,gy,gx,adc}]
+\end{example}
+
+The same in black and white, with a longer echo time and crusher gradients:
+\begin{example}
+\SpinEchoDiagram[style=bw, TE=12, crushers, values]
+\end{example}
+
+The package requires a \LaTeX{} kernel from 2022-06 or newer and Ti\emph{k}Z.
+It works with pdf\LaTeX, Xe\LaTeX{} and Lua\LaTeX. Diagrams take the width of
+the surrounding text (\cs{linewidth}), so they also work in \texttt{minipage}s
+and \texttt{subfigure}s; see Section~\ref{sec:size}.
+
+% =====================================================================
+\section{Ready-made sequences}
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+Stand-alone command & inside a \texttt{mriseq} environment \\
+\midrule
+\cs{SpinEchoDiagram}\oarg{keys}          & \cs{spinecho}\oarg{keys} \\
+\cs{GradientEchoDiagram}\oarg{keys}      & \cs{gradientecho}\oarg{keys} \\
+\cs{InversionRecoveryDiagram}\oarg{keys} & \cs{inversionrecovery}\oarg{keys} \\
+\cs{EPIDiagram}\oarg{keys}               & \cs{epi}\oarg{keys} \\
+\cs{TurboSpinEchoDiagram}\oarg{keys}     & \cs{turbospinecho}\oarg{keys} \\
+\cs{DiffusionSpinEchoDiagram}\oarg{keys} & \cs{diffusionspinecho}\oarg{keys} \\
+\cs{DiffusionEPIDiagram}\oarg{keys}      & \cs{diffusionepi}\oarg{keys} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The stand-alone commands accept \emph{both} sequence keys
+(Section~\ref{sec:seqkeys}) and diagram keys (Section~\ref{sec:diagkeys}) in
+one list. The lower-case forms add the elements of the sequence to a
+\texttt{mriseq} environment, so you can combine them with your own elements and
+annotations (Section~\ref{sec:combine}).
+
+\subsection{Gradient echo}
+\begin{example}
+\GradientEchoDiagram[flip label=$\alpha$]
+\end{example}
+
+With a spoiler, a phase rewinder, the next repetition (the long, empty gap
+is compressed automatically, see \key{compress}) and values:
+\begin{example}
+\GradientEchoDiagram[spoiler, rewinder, show TR, TR=30, values,
+                     phase highlight=0.5]
+\end{example}
+
+\subsection{Inversion recovery}
+The default read-out is a spin echo; \key{readout=gre} gives a gradient-echo
+read-out. The $M_z$ row shows the longitudinal magnetisation computed from
+\key{T1} (it is not shown by default; add it to \key{rows}).
+\begin{example}
+\InversionRecoveryDiagram[rows={rf,gz,gy,gx,sig,mz}, TI=300, T1=600]
+\end{example}
+
+Note how the signal is inverted: at $\mathrm{TI}=300$\,ms and
+$T_1=600$\,ms the longitudinal magnetisation is still negative,
+$1-2e^{-\mathrm{TI}/T_1}<0$, when the $90^\circ$ pulse is applied.
+
+\subsection{Echo-planar imaging}
+\cs{EPIDiagram} draws a single-shot, blipped EPI read-out: after the excitation the
+read and phase prephasers move to a corner of $k$-space, then the read-out
+gradient alternates sign for every $k$-space line while small triangular blips on
+$G_y$ step to the next line. TE is the time to the centre line of $k$-space.
+The whole echo train is drawn to scale, without an axis cut.
+EPI uses its own defaults: \key{phase steps=16} (16 lines keep the diagram
+readable; use \key{phase steps=64} for a realistic train), \key{dwell=0.005}
+(200\,kHz), \key{grad ramp=0.1} and \key{grad scale=row} (each gradient row is
+scaled to its own largest amplitude, so the small blips stay visible; use
+\key{grad scale=shared} for one common scale).
+\begin{example}
+\EPIDiagram
+\end{example}
+\key{refocusing} gives a spin-echo EPI; \key{kspace} adds the $k$-space
+trajectory (Section~\ref{sec:kspace}):
+\begin{example}
+\EPIDiagram[refocusing, annotate={TE/2,TE}, values, kspace,
+            rows={rf,gz,gy,gx,adc}]
+\end{example}
+Zoom into a few lines of the train with a time window:
+\begin{example}
+\EPIDiagram[detailed, rows={gy,gx,adc}, time=4:8]
+\end{example}
+
+\paragraph{Segmented (multi-shot) EPI.} \key{shots=\meta{n}} acquires every
+$n$-th line per shot: the blips are $n$ lines high and the phase prephaser of
+shot $s$ starts $s$ lines further in. By default two shots are drawn
+(\key{repetitions} changes that); the $k$-space panel shows the interleaving:
+\begin{example}
+\EPIDiagram[shots=4, repetitions=4, TR=60, rows={rf,gy,gx}, kspace]
+\end{example}
+
+\subsection{Turbo spin echo}
+\cs{TurboSpinEchoDiagram} draws a CPMG echo train of \key{echo train length}
+(\key{ETL}, default 4) refocusing pulses with spacing \key{echo spacing}
+(\key{ESP}, \texttt{auto} is the shortest possible, rounded up to whole ms).
+Every echo has its own phase encoding and rewinder; the highlighted line shows how
+$k_y$ is stepped through the train. The echo with $k_y=0$ is
+\key{effective echo} (default: the middle one) and gives the effective echo time
+$\mathrm{TE}_\mathrm{eff}$.
+\begin{example}
+\TurboSpinEchoDiagram[rows={rf,gz,gy,gx,sig}]
+\end{example}
+
+\subsection{Diffusion weighting}
+\cs{DiffusionSpinEchoDiagram} and \cs{DiffusionEPIDiagram} add a
+Stejskal--Tanner pair of diffusion gradients around the $180^\circ$ pulse, on
+the row \texttt{gd} ($G_\mathrm{D}$). From the b-value \key{b} (s/mm$^2$), the
+gradient amplitude \key{diffusion amp} (mT/m) and ramp time \key{diffusion ramp}
+($\varepsilon$) the lobe duration $\delta$ is solved from
+\[
+  b = \gamma^2 G^2\Bigl[\delta^2\bigl(\Delta-\tfrac{\delta}{3}\bigr)
+      + \tfrac{\varepsilon^3}{30} - \tfrac{\delta\varepsilon^2}{6}\Bigr]
+\]
+with the lobes placed right next to the refocusing pulse; TE grows accordingly.
+\key{diffusion axis=\{gx,gy,gz\}} puts the lobes on the imaging axes instead
+(each with amplitude $G/\sqrt{n}$). The echo is weighted by
+$e^{-b D}$ with \key{diffusivity} $D$ (mm$^2$/s). Diffusion diagrams scale each
+gradient row on its own (\key{grad scale=row}).
+\begin{example}
+\DiffusionSpinEchoDiagram[values, rows={rf,gz,gx,gd,sig}]
+\end{example}
+\begin{example}
+\DiffusionEPIDiagram[b=500]
+\end{example}
+
+\subsection{Several repetitions}
+\key{repetitions=\meta{n}} draws $n$ complete repetitions, \key{TR} apart (default
+\texttt{auto}: one, or two for segmented EPI). The
+empty time between them is cut (see \key{compress}), every TR is marked, the
+highlighted phase-encoding line steps from one repetition to the next, and the
+$M_z$ row shows how the magnetisation approaches its steady state.
+\key{show TR} adds the start of one more repetition.
+\begin{example}
+\SpinEchoDiagram[repetitions=3, TR=600, rows={rf,gz,gy,gx,sig,mz}]
+\end{example}
+\begin{example}
+\GradientEchoDiagram[repetitions=3, TR=12, spoiler, ticks,
+                     rows={rf,gz,gy,gx,mz}]
+\end{example}
+\begin{example}
+\EPIDiagram[repetitions=2, ticks, break style=zigzag,
+            rows={rf,gz,gy,gx,adc}]
+\end{example}
+
+\subsection{Sequence keys}\label{sec:seqkeys}
+All times are in ms, gradients in mT/m, areas in mT\,ms/m. The keys can also be
+set globally with \cs{mriseqset}.
+
+{\small
+\begin{xltabular}{\linewidth}{@{}>{\ttfamily\raggedright\arraybackslash}p{0.28\linewidth}>{\ttfamily}lX@{}}
+\toprule
+\normalfont Key & \normalfont Default & Meaning \\
+\midrule
+\endhead
+TE & auto & echo time; \texttt{auto} is the shortest possible TE rounded up to whole ms. A warning is issued if a given TE is too short. \\
+TR & 500 & repetition time (only drawn with \key{show TR}) \\
+TI & 400 & inversion time (inversion recovery) \\
+show TR & false & draw the start of the next repetition and the TR interval \\
+repetitions & auto & number of complete repetitions drawn \\
+mark TR & true & mark TR between repetitions \\
+refocusing & false & EPI: spin-echo EPI with a $180^\circ$ pulse at TE/2 \\
+echo train length, ETL & 4 & TSE: number of echoes \\
+echo spacing, ESP & auto & TSE: echo spacing \\
+effective echo & auto & TSE: echo with $k_y=0$ (the middle one) \\
+shots & 1 & EPI: number of shots (segments) \\
+b & 0 / 1000 & b-value in s/mm$^2$ (diffusion diagrams) \\
+diffusion amp & 40 & diffusion gradient amplitude (mT/m) \\
+diffusion ramp & 0.3 & ramp time of the diffusion gradients \\
+diffusion axis & gd & row(s) of the diffusion gradients \\
+diffusivity & 0.0008 & apparent diffusion coefficient (mm$^2$/s) for the signal \\
+delta label, Delta label & & labels of the diffusion intervals ($\delta$, $\Delta$) \\
+equal areas & false & shade the pairs of equal gradient areas (SE, GRE; Section~\ref{sec:shade}) \\
+flip & 90 / 30 & excitation flip angle in degrees (SE, IR / GRE) \\
+flip label & & text above the excitation pulse instead of the angle, e.g.\ \verb|$\alpha$| \\
+excitation phase & & subscript of the excitation angle, e.g.\ \texttt{x} gives $90^\circ_x$ \\
+refocusing phase & & same for the $180^\circ$ pulse \\
+readout & se & read-out of inversion recovery: \texttt{se} or \texttt{gre} \\
+pulse dur & 2 & duration of the excitation pulse \\
+refocusing dur & 2 & duration of the refocusing pulse \\
+inversion dur & 2 & duration of the inversion pulse \\
+pulse tbw & 4 & time--bandwidth product of the sinc pulses \\
+slice & 5 & slice thickness in mm \\
+fov & 240 & field of view in mm \\
+matrix & 64 & sets both \key{read points} and \key{phase steps} \\
+read points & 64 & number of read-out samples \\
+phase steps & 64 / 16 & number of phase-encoding steps (EPI: 16) \\
+dwell & 0.05 / 0.005 & ADC dwell time (ms per sample; EPI: 0.005) \\
+grad ramp & 0.2 / 0.1 & ramp time of all gradients (EPI: 0.1) \\
+prephaser dur & 1 & duration of the slice rephaser, phase encoder and read prephaser (incl.\ ramps) \\
+lead & 0.5 & time before the first gradient starts \\
+crushers & false & crusher gradients around the $180^\circ$ pulse (SE) \\
+crusher dur & 0.8 & duration of each crusher \\
+spoiler & false & spoiler gradient on $G_z$ after the read-out (GRE) \\
+inversion spoiler & true & spoiler after the inversion pulse (IR) \\
+spoiler dur & 1.4 & spoiler duration \\
+rewinder & false & phase rewinder after the read-out (GRE) \\
+phase lines & 9 & number of lines drawn in the phase-encoding table \\
+phase highlight & & draw one phase step in the accent colour, value in $[-1,1]$ \\
+annotate & \normalfont see text & timing intervals to draw: any of \texttt{TE}, \texttt{TE/2}, \texttt{TI}, \texttt{TR}, \texttt{ESP} (EPI, TSE), \texttt{train} (EPI), \texttt{delta}, \texttt{Delta} (diffusion). Defaults: SE \texttt{\{TE/2,TE\}}, GRE and EPI \texttt{\{TE\}}, IR \texttt{\{TI,TE\}}, TSE \texttt{\{ESP,TE\}}, diffusion \texttt{\{TE,delta,Delta\}}. Use \texttt{annotate=\{\}} for none. \\
+TE label, TE/2 label, TR label, TI label, ESP label & \normalfont\ttfamily TE, \dots & the text of the intervals \\
+pulse markers & true & dashed lines through all rows at the RF pulse centres \\
+echo marker & true & marker at the echo centre \\
+echo label & SE / GE & label of the echo marker \\
+signal & true & emit the FID and echo for the \texttt{sig} row \\
+T1, T2, T2* & 900, 90, 40 & relaxation times used for the signal and $M_z$ \\
+fid decay & 0.7 & display decay constant of the FID \\
+\bottomrule
+\end{xltabular}}
+
+
+\subsection{How the numbers are computed}\label{sec:physics}
+With $\bar\gamma = 42.577$\,kHz/mT (\textsuperscript{1}H):
+\begin{itemize}
+\item slice-select amplitude $G_\mathrm{ss} = \dfrac{\mathrm{TBW}/\tau}{\bar\gamma\,\Delta z}$
+      (pulse duration $\tau$, slice thickness $\Delta z$); the RF pulse lies on the flat top;
+\item slice rephaser area $-G_\mathrm{ss}\,(\tau/2 + t_\mathrm{ramp}/2)$;
+\item read-out amplitude $G_\mathrm{ro} = \dfrac{1/\Delta t}{\bar\gamma\,\mathrm{FOV}}$
+      with dwell time $\Delta t$; the ADC window ($N_\mathrm{read}\,\Delta t$) is the flat top,
+      centred on the echo;
+\item read prephaser area $\pm G_\mathrm{ro}\,(T_\mathrm{acq}/2 + t_\mathrm{ramp}/2)$:
+      the same sign as the read-out for a spin echo (the $180^\circ$ pulse inverts the phase),
+      the opposite sign for a gradient echo;
+\item maximum phase-encoding area $\dfrac{N_\mathrm{phase}/2}{\bar\gamma\,\mathrm{FOV}}$;
+\item spin echo: the $180^\circ$ pulse is at TE/2, the echo at TE (both from the centre
+      of the excitation pulse); inversion recovery: TI is measured between the
+      centres of the inversion and excitation pulses;
+\item EPI: echo spacing $\mathrm{ESP}=N_\mathrm{read}\Delta t + 2t_\mathrm{ramp}$, the
+      read-out lobes alternate sign, each blip has the area of one $k$-space line,
+      $1/(\bar\gamma\,\mathrm{FOV})$, the prephasers move to
+      $(-k_{x,\max},-k_{y,\max})$, and TE is the time to line $N_\mathrm{phase}/2$
+      (the centre of $k$-space);
+\item segmented EPI with $n$ shots: blips of $n$ lines, shot $s$ starts at
+      $k_y = -k_{y,\max} + s\,\Delta k_y$;
+\item diffusion: Stejskal--Tanner equation for trapezoidal lobes (above), with
+      $\gamma = 2\pi\cdot 42.577$\,MHz/T;
+\item TSE: refocusing pulses at $(n-\tfrac12)\,\mathrm{ESP}$, echoes at
+      $n\,\mathrm{ESP}$, phase encoding before and rewinding after every echo,
+      $\mathrm{TE}_\mathrm{eff}$ is the time of the echo with $k_y=0$;
+\item the RF amplitude is proportional to flip angle\,/\,(duration $\times$ mean of the
+      pulse shape), i.e.\ the $B_1$ amplitude that gives that flip angle;
+\item the $M_z$ row follows $M_z(t) = 1-(1-M_z(t_0))\,e^{-(t-t_0)/T_1}$ between pulses,
+      and $M_z \to M_z\cos\alpha$ at each pulse;
+\item signals are schematic: FID amplitude $\propto\sin\alpha$, echo amplitude
+      $\propto e^{-\mathrm{TE}/T_2}$ (SE) or $e^{-\mathrm{TE}/T_2^*}$ (GRE), multiplied by
+      $1-2e^{-\mathrm{TI}/T_1}$ for inversion recovery; the shape of the echo is
+      illustrative.
+\end{itemize}
+All rows of one amplitude group share one scale (all gradient rows share the
+gradient scale, except with \key{grad scale=row}), so the heights can be compared
+between rows.
+
+% =====================================================================
+\section{Choosing what is shown}\label{sec:diagkeys}
+
+\subsection{Rows and time window}
+\key{rows} selects the rows and their order. Elements on rows that are not
+shown are skipped, but still count for the amplitude scale, so a partial diagram
+uses the same scale as the full one. \key{time=\meta{from}:\meta{to}} (or
+\key{tmin}, \key{tmax}) selects a time window in ms; everything is clipped to it.
+Together they let you isolate a part of a sequence, for example the slice
+selection of the spin echo, or only the RF and read-out rows:
+\begin{example}
+\SpinEchoDiagram[rows={rf,gz}, time=0:4.5, detailed, width=0.6\linewidth,
+                 annotate={}, markers=false]
+\end{example}
+\begin{example}
+\SpinEchoDiagram[rows={rf,gx,adc}, values, annotate={TE}]
+\end{example}
+
+The predefined rows are \texttt{rf}, \texttt{gz}, \texttt{gy}, \texttt{gx},
+\texttt{gd} (diffusion), \texttt{adc}, \texttt{sig} (signal), \texttt{mz} and
+\texttt{kx}, \texttt{ky}, \texttt{kz} ($k$-space); the default is
+\texttt{rows=\{rf,\allowbreak gz,\allowbreak gy,\allowbreak gx,\allowbreak adc,\allowbreak sig\}}. See Section~\ref{sec:rows} for your own rows.
+
+\subsection{Numbers, axis and markers}
+{\small
+\begin{xltabular}{\linewidth}{@{}>{\ttfamily}l>{\ttfamily}lX@{}}
+\toprule
+\normalfont Key & \normalfont Default & Meaning \\
+\midrule
+\endhead
+schematic & & preset: no numbers, no axis, no grid (the default state) \\
+detailed  & & preset: \key{values}, \key{ticks}, \key{grid} \\
+values    & false & sets \key{amp labels}, \key{area labels} and \key{adc labels}; ready-made sequences also print the length of intervals (TE\,=\,7\,ms) \\
+amp labels & false & gradient amplitudes with unit (\key{grad unit=mT/m}) \\
+area labels & false & gradient areas (\key{area unit} is empty by default) \\
+adc labels & false & ADC samples $\times$ dwell time \\
+flip labels & true & flip angles above RF pulses \\
+precision & 2 & decimals of printed numbers \\
+ticks & false & time axis with ticks and numbers (in ms, \key{axis label=ms}) \\
+tick step & auto & distance of the ticks \\
+axis & false & a plain time arrow labelled \key{time label=\$t\$} (when \key{ticks} is false) \\
+grid & false & light vertical lines at the ticks \\
+markers & true & show markers (dashed lines at pulses and echoes) \\
+row lines & \normalfont style & thin separators between rows \\
+baselines & true & zero line of each row \\
+row labels & true & row names at the left (column width \key{label width=1.3cm}) \\
+\bottomrule
+\end{xltabular}}
+
+\paragraph{Where numbers go.} Amplitudes are printed beyond the peak of a lobe
+(above a positive, below a negative lobe). Areas are printed inside the flat top
+when they fit there completely, otherwise on the other side of the zero line.
+Labels on the background get a backing in the background colour
+(\key{background color}, white), so that dashed lines are cleanly interrupted.
+A number that would overlap another number or another waveform is left out
+(a note is written to the log file); labels at the edge of the time window are
+moved inwards. Zoom in with a time window to see all numbers of a crowded
+sequence, or switch the check off with \key{avoid overlaps=false}.
+
+Numbers are printed with \cs{mriseqformatnumber}, which you can redefine, e.g.\
+with \pkg{siunitx}:
+\begin{verbatim}
+\renewcommand\mriseqformatnumber[1]{\num{#1}}
+\end{verbatim}
+A key value that contains a comma or an equals sign must be put in braces,
+e.g.\ \verb|label={$k=0$}|.
+
+\subsection{Compressing long pauses}
+Empty stretches longer than \key{compress threshold} (8\,ms) are compressed
+into a break of width \key{break width} (0.5\,cm), drawn as $/\!/$ on each
+baseline and on the axis; the time axis continues with the true times after the
+break. Switch it off with \key{compress=false}; add breaks yourself with
+\cs{gap}. \key{break margin} (0.6\,ms) is the empty time kept on both sides.
+\key{break style=slash|zigzag|none} chooses the cut mark.
+
+\subsection{Size, subfigures and narrow diagrams}\label{sec:size}
+\key{width} (default \cs{linewidth}) is the total width including the row
+labels. Inside a \texttt{subfigure} or \texttt{minipage} \cs{linewidth} is the
+width of that box. Diagrams narrower than \key{auto compact} (9\,cm) switch to
+the \key{compact} preset automatically: smaller fonts, lower rows and a
+narrower label column (set \key{auto compact=0pt} to switch this off, or use
+\key{compact} for any diagram). Your own keys are applied on top of it.
+\begin{exampleonly}
+\begin{figure}
+  \begin{subfigure}{0.48\linewidth}
+    \SpinEchoDiagram[rows={rf,gz,gy,gx,sig}]
+    \caption{Spin echo}
+  \end{subfigure}\hfill
+  \begin{subfigure}{0.48\linewidth}
+    \GradientEchoDiagram[rows={rf,gz,gy,gx,sig}]
+    \caption{Gradient echo}
+  \end{subfigure}
+\end{figure}
+\end{exampleonly}
+\begin{figure}[h]
+  \begin{subfigure}{0.48\linewidth}
+    \SpinEchoDiagram[rows={rf,gz,gy,gx,sig}]
+    \caption{Spin echo}
+  \end{subfigure}\hfill
+  \begin{subfigure}{0.48\linewidth}
+    \GradientEchoDiagram[rows={rf,gz,gy,gx,sig}]
+    \caption{Gradient echo}
+  \end{subfigure}
+\end{figure}
+
+Further size keys: Alternatively \key{xscale=1cm} fixes the length of one ms.
+\key{row scale} multiplies all row heights, \key{amp fill} (0.85) is the
+fraction of the half row height used by the largest amplitude, \key{grad max},
+\key{rf max}, \key{signal max} fix the amplitude that fills a row instead of
+using the largest one. \key{grad scale=row} scales each gradient row to its own
+largest amplitude instead of one scale for all gradient rows (\key{shared}, the
+default except for EPI). \key{tikz=\{...\}} passes options to the
+\texttt{tikzpicture}.
+
+% =====================================================================
+\section{\texorpdfstring{$k$}{k}-space}\label{sec:kspace}
+The $k$-space position $k(t) = \bar\gamma\int G\,dt$ is computed exactly from
+the gradients on the rows \texttt{gx}, \texttt{gy} and \texttt{gz}: an
+excitation pulse sets $k$ to zero at its centre, a refocusing or inversion pulse
+mirrors it ($k\to-k$). A phase-encoding table contributes its highlighted step
+(\key{phase highlight}, \key{highlight}) or else its outermost step.
+
+\paragraph{$k(t)$ rows.} Add \texttt{kx}, \texttt{ky} and/or \texttt{kz} to
+\key{rows}:
+\begin{example}
+\GradientEchoDiagram[rows={rf,gy,gx,kx,ky}, phase highlight=0.5]
+\end{example}
+
+\paragraph{Trajectory panel.} \key{kspace=right|left|below} draws the
+$k_x$--$k_y$ trajectory next to the diagram, \key{kspace size} (3.6\,cm) wide.
+The thin line is the path, the thick line the part sampled by the ADC, the
+dotted line the jump at a refocusing pulse; the dot marks $k=0$. Only the part
+inside the time window is drawn, so with \key{time} you can show how a part of
+the sequence moves through $k$-space. The axes are scaled to the largest
+$|k_x|$ and $|k_y|$ (\key{kspace isotropic} uses one scale for both);
+\key{kspace title} adds a title.
+\begin{example}
+\SpinEchoDiagram[rows={rf,gz,gy,gx}, kspace=left, phase highlight=0.75]
+\end{example}
+
+% =====================================================================
+\section{Highlighting areas}\label{sec:shade}
+\cs{shadearea}\oarg{keys}\marg{row}\marg{t1}\marg{t2} fills the part of the
+gradients of one row between two times. \key{style=A|B|C|D} picks one of four
+matching fills (colours in the colour style, hatchings in the black-and-white
+style) or any Ti\emph{k}Z fill options; \key{label} adds a label inside the
+area, \key{label=auto} prints its area. The ready-made SE and GRE diagrams mark
+the classic pairs of equal areas with \key{equal areas}: the second half of the
+slice-select gradient and the slice rephaser (A), and the read prephaser and the
+first half of the read-out (B).
+\begin{example}
+\GradientEchoDiagram[rows={rf,gz,gx}, equal areas]
+\end{example}
+\begin{example}
+\begin{mriseq}[rows={rf,gx}, ticks, style=bw]
+  \rfpulse{center=1, dur=1, flip=90}
+  \gradient{gx}{start=2, flat=0.6, amp=-1}
+  \gradient{gx}{start=3, flat=3, amp=0.5}
+  \shadearea[label=auto]{gx}{2}{3}
+  \shadearea[label=auto]{gx}{3}{4.6}
+  \shadearea[style=B]{gx}{4.6}{6.4}
+\end{mriseq}
+\end{example}
+
+% =====================================================================
+\section{Drawing your own sequences}\label{sec:own}
+
+\begin{exampleonly}
+\begin{mriseq}[<diagram keys>]
+  <elements>
+\end{mriseq}
+\end{exampleonly}
+
+Elements are collected first and drawn at the end of the environment, so the
+order in which you write them does not matter (except for overlaps). Every
+element takes a key list. Times are in ms; amplitudes are in any unit you like
+(each amplitude group is scaled to its largest value).
+
+\begin{example}
+\begin{mriseq}[rows={rf,gz,gx,sig}, ticks, grad labels=plain]
+  \rfpulse{center=1.5, dur=1, flip=90, phase=x}
+  \gradient{gz}{center=1.5, flat=1, amp=1}
+  \gradient{gz}{start=2.2, flat=0.4, area=-0.6}
+  \gradient{gx}{start=2.2, flat=0.6, amp=-1, label=prephaser}
+  \gradient{gx}{center=5, flat=2.4, amp=0.8}
+  \fid{start=2, t2=0.4}
+  \echo{center=5, t2=0.4, cycles=2}
+  \marker[kind=echo, label=echo]{5}
+  \interval{1.5}{5}{TE}
+\end{mriseq}
+\end{example}
+
+\subsection{Element commands}
+\begin{center}\small
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\toprule
+Command & Element \\
+\midrule
+\cs{rfpulse}\oarg{row}\marg{keys}         & RF pulse (row \texttt{rf} by default) \\
+\cs{gradient}\marg{row}\marg{keys}        & trapezoid gradient \\
+\cs{phasetable}\oarg{row}\marg{keys}      & phase-encoding table (row \texttt{gy}) \\
+\cs{readout}\oarg{row}\marg{keys}         & ADC window (row \texttt{adc}) \\
+\cs{fid}\oarg{row}\marg{keys}             & free induction decay (row \texttt{sig}) \\
+\cs{echo}\oarg{row}\marg{keys}            & echo signal (row \texttt{sig}) \\
+\cs{waveform}\marg{row}\oarg{keys}\marg{t/a, t/a, ...} & piecewise-linear waveform \\
+\cs{marker}\oarg{keys}\marg{t}            & vertical line through all rows \\
+\cs{interval}\oarg{keys}\marg{t1}\marg{t2}\marg{label} & timing interval with arrows \\
+\cs{gap}\marg{t1}\marg{t2}                & compress $[t_1,t_2]$ into a break \\
+\cs{shadearea}\oarg{keys}\marg{row}\marg{t1}\marg{t2} & shade gradient areas, see \ref{sec:shade} \\
+\cs{annotate}\marg{TikZ code}             & arbitrary Ti\emph{k}Z code, see \ref{sec:cs} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\paragraph{Timing keys (all waveform elements).}
+\key{start}, \key{center} (alias \key{at}) or \key{end} place the element;
+for gradients \key{center} is the centre of the flat top. \key{dur} is the
+total duration.
+
+\paragraph{\cs{rfpulse}.}
+\key{flip} (degrees; also the default label and amplitude), \key{amp}
+(overrides the amplitude), \key{dur} (default \key{rf dur=2}),\\
+\key{shape=sinc|gauss|hard|sech} (default \key{rf shape}), \key{tbw}
+(sinc time--bandwidth product, default 4),\\ \key{window=hamming|hann|none}
+(default \key{rf window=hamming}),\\ \key{phase} (subscript), \key{label},
+\key{role=excite|refocus|invert} (colour; default: refocus for flip $>135^\circ$,
+otherwise excite).
+
+\paragraph{\cs{gradient} and \cs{phasetable}.}
+\key{amp}, \key{flat}, \key{ramp} (both ramps, default \key{ramp=0.2}),
+\key{ramp up}, \key{ramp down}, \key{area}. Give any two of \key{amp},
+\key{flat}, \key{area} (or \key{dur} instead of \key{flat}). \key{label}
+replaces the amplitude label; \key{split=\meta{t}} prints the area before and
+after time $t$ (e.g.\ the centre of an RF pulse). Phase tables also take
+\key{lines} (default 9), \key{arrow=down|up|none}, \key{highlight} (a value in
+$[-1,1]$) and \key{fan} (draw each step as a full trapezoid).
+
+\paragraph{\cs{readout}.} \key{samples}, \key{dwell} (gives the duration if
+\key{dur} is not set), \key{kzero=\meta{t}} (dot at the centre of $k$-space),
+\key{sample ticks} (true), \key{label}.
+
+\paragraph{\cs{fid} and \cs{echo}.} \key{amp}, \key{t2} (decay constant),
+\key{cycles} (oscillations per decay constant), \key{oscillate} (true; false
+draws the envelope), \key{resolution}.
+
+\paragraph{\cs{waveform}.} \key{filled} (true), \key{label}, and
+\key{group} to put it in another amplitude group.
+
+\paragraph{Common keys.} \key{color} (line colour), \key{fill}, \key{style}
+(extra Ti\emph{k}Z options), \key{values}, \key{amp labels}, \key{area labels}
+to override the diagram setting for one element, \key{occupy=false} to exclude
+an element from the time range and from the automatic compression.
+
+\subsection{Markers and intervals}
+\cs{marker} takes \key{kind=plain|echo|excite|refocus|invert} (colour and look),
+\key{label} and \key{color}. \cs{interval} takes \key{pos=top|bottom|\meta{row}},
+\key{level} (stacking level above the diagram, 1 is the lowest),
+\key{height} (position inside a row, 0 to 1), \key{guides} (dotted lines from
+a top interval down to the diagram) and \key{style}.
+
+\begin{example}
+\begin{mriseq}[rows={rf,gx,adc}, ticks, compress threshold=5]
+  \rfpulse{center=1, dur=1, flip=90}
+  \gradient{gx}{start=2, flat=1, amp=-1}
+  \gradient{gx}{center=6, flat=3, amp=0.67}
+  \readout{center=6, samples=32, dwell=0.09375, kzero=6}
+  \interval[level=1]{1}{6}{$T_E$}
+  \interval[pos=gx, height=0.85, guides=false]{4.5}{7.5}{$T_\mathrm{acq}$}
+  \interval[pos=bottom]{0.5}{1.5}{RF}
+  \marker[kind=echo, label={$k=0$}]{6}
+  \gap{8}{40}
+  \rfpulse{center=41, dur=1, flip=90}
+  \interval[level=2]{1}{41}{$T_R$}
+\end{mriseq}
+\end{example}
+
+\subsection{Combining ready-made sequences and own elements}\label{sec:combine}
+\begin{example}
+\begin{mriseq}[rows={rf,gz,gy,gx,sig}]
+  \spinecho[annotate={TE}, echo marker=false]
+  \marker[kind=echo, label={Hahn echo}]{8.7}
+  \annotate{\node[font=\scriptsize, anchor=west]
+     at (seq cs:t=9.4, row=sig, a=0.6) {$\propto e^{-\mathrm{TE}/T_2}$};}
+\end{mriseq}
+\end{example}
+
+\subsection{Ti\emph{k}Z coordinates}\label{sec:cs}
+Inside \cs{annotate} the coordinate system \texttt{seq} converts sequence
+coordinates to the picture:
+\begin{center}
+\verb|(seq cs: t=|\meta{ms}\verb|, row=|\meta{row}\verb|, a=|\meta{amplitude}\verb|)|
+\end{center}
+\key{a} is in the units of that row (after scaling). Without \key{row},
+\key{y=\meta{length}} gives an absolute height (0 is the top of the first row).
+
+\begin{example}
+\begin{mriseq}[rows={rf,gx}]
+  \rfpulse{center=1, dur=1.2, flip=90}
+  \gradient{gx}{start=2, flat=0.6, amp=-1}
+  \gradient{gx}{start=3, flat=2.4, amp=0.5}
+  \annotate{
+    \fill[red!25, opacity=0.6] (seq cs:t=2.2,row=gx,a=0)
+       rectangle (seq cs:t=2.8,row=gx,a=-1);
+    \draw[red, <-] (seq cs:t=2.5,row=gx,a=-0.5) -- ++(1,-0.2)
+       node[right, font=\footnotesize]{area $=-A$};}
+\end{mriseq}
+\end{example}
+
+% =====================================================================
+\section{Rows}\label{sec:rows}
+\cs{mriseqdefinerow}\marg{name}\marg{keys} defines or changes a row. Keys:
+\key{label}, \key{sublabel}, \key{height} (a length), \key{baseline}
+(position of the zero line as a fraction of the height; 0.5 for gradients,
+0.22 for RF) and \key{group} (amplitude group: \texttt{rf}, \texttt{grad},
+\texttt{adc}, \texttt{sig}, \texttt{mz} or any new name). Inside a diagram's
+options use \key{row=\{\meta{name}\}\{\meta{keys}\}}.
+
+\key{grad labels=physical|logical|plain|words} switches the gradient labels
+between $G_z$/$G_y$/$G_x$ with sublabels, $G_\mathrm{SS}$/$G_\mathrm{PE}$/$G_\mathrm{RO}$,
+plain $G_z$/$G_y$/$G_x$, and $G_\mathrm{slice}$/$G_\mathrm{phase}$/$G_\mathrm{read}$.
+
+\begin{example}
+\mriseqdefinerow{gs}{label=$G_\mathrm{s}$, sublabel=spoiler, group=grad}
+\begin{mriseq}[rows={rf,gs,gx}, grad labels=logical, row={rf}{label=$B_1$}]
+  \gradientecho[signal=false]
+  \gradient{gs}{start=8, flat=1.5, amp=12}
+\end{mriseq}
+\end{example}
+
+% =====================================================================
+\section{Styles}
+\subsection{Built-in styles}
+\key{style=color} (default), \key{style=bw} (all lines and text black, filled
+areas gray) and \key{style=grayscale} (gray tones for the different pulse
+types). Choose one for the document with the package option
+(\verb|\usepackage[bw]{mriseq}|) or \verb|\mriseqset{style=bw}|, or for one
+diagram with its \key{style} key.
+
+\begin{example}
+\GradientEchoDiagram[style=bw, rows={rf,gz,gy,gx,sig}, spoiler]
+\end{example}
+\begin{example}
+\InversionRecoveryDiagram[style=grayscale, rows={rf,gz,gy,gx,adc}]
+\end{example}
+
+\subsection{Appearance keys}
+\begin{center}\small
+\begin{tabularx}{\linewidth}{@{}>{\ttfamily\raggedright\arraybackslash}p{0.45\linewidth}X@{}}
+\toprule
+\normalfont Key & Meaning \\
+\midrule
+rf excite color, rf refocus color, rf invert color, rf color & RF pulses by role (\key{rf color} sets all three) \\
+grad color, phase color, adc color, signal color & lines of the elements; \key{phase color} is the accent for phase tables \\
+echo color, marker color, interval color & markers and intervals \\
+text color, sublabel color, value color, axis color & text \\
+baseline color, grid color, row line color, background color & background (\key{background color} is the backing of labels) \\
+k color & $k$-space trajectory \\
+area A style, \dots, area D style & Ti\emph{k}Z fill options of the shaded areas \\
+rf fill mix, grad fill mix, adc fill mix, signal fill mix & fill = line colour mixed with this percentage and white \\
+rf fill, grad fill, adc fill & a fixed fill colour instead of the mix \\
+line width, thin line width & 0.7pt / 0.4pt in the colour style \\
+label font, sublabel font, value font, axis font, interval font, flip font & fonts \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+All drawing is done with Ti\emph{k}Z styles under \texttt{mriseq/} that you can
+change with \verb|\tikzset|, e.g.\ \texttt{mriseq/rf}, \texttt{mriseq/grad},
+\texttt{mriseq/phase}, \texttt{mriseq/phase lines}, \texttt{mriseq/adc},
+\texttt{mriseq/signal}, \texttt{mriseq/marker}, \texttt{mriseq/echo marker},
+\texttt{mriseq/interval}, \texttt{mriseq/interval label},
+\texttt{mriseq/baseline}, \texttt{mriseq/grid}, \texttt{mriseq/axis},
+\texttt{mriseq/row label}, \texttt{mriseq/value}, \texttt{mriseq/value outside},
+\texttt{mriseq/flip label}, \texttt{mriseq/area A} (to \texttt{D}),
+\texttt{mriseq/kspace path}, \texttt{mriseq/kspace adc}, \texttt{mriseq/kspace frame}.
+
+\subsection{Your own style}
+\begin{example}
+\mriseqdefinestyle{report}{
+  style=color, rf excite color=teal, rf refocus color=orange!80!black,
+  grad color=black!70, grad fill mix=10, line width=0.9pt,
+  label font=\small\sffamily, value font=\scriptsize\sffamily}
+\GradientEchoDiagram[style=report, rows={rf,gz,gy,gx}, values]
+\end{example}
+
+% =====================================================================
+\section{Compile time}
+Every diagram is computed by \TeX{} itself, which takes roughly 0.5--3\,s per
+diagram (EPI with a $k$-space panel and long echo trains are the slowest).
+Rows that are not shown are not computed where possible (signal, $M_z$, $k$).
+For a report with many diagrams, Ti\emph{k}Z's externalisation caches every
+diagram as a PDF and only recompiles changed ones; a cached diagram costs
+almost nothing (all computation happens inside the \texttt{tikzpicture}, which
+is skipped):
+\begin{exampleonly}
+\usetikzlibrary{external}
+\tikzexternalize[prefix=tikzcache/]   % needs -shell-escape
+\end{exampleonly}
+
+% =====================================================================
+\section{Limitations and plans}
+\begin{itemize}
+\item Ready-made sequences: SE, GRE, IR (SE or GRE read-out), EPI (GRE or SE,
+      single or multi-shot), TSE, diffusion-weighted SE and SE-EPI. Further
+      candidates: stimulated echo, balanced SSFP, spiral and radial read-outs.
+\item Signal shapes are illustrative (see Section~\ref{sec:physics}).
+\item An element that crosses a compressed gap is drawn compressed as well.
+\item Overlapping gradients on the same row are drawn on top of each other (for
+      $k$-space they are added).
+\item Nested \texttt{mriseq} environments are not supported.
+\end{itemize}
+
+\section{Change log}
+\begin{description}
+\item[0.3.0 (2026-11-17)] First public release: SE, GRE, IR, EPI
+  (single/multi-shot, GRE/SE), TSE, diffusion SE and SE-EPI; repetitions and
+  axis cut marks; $k(t)$ rows and $k$-space panel; area shading; label
+  placement without overlaps; compact mode for narrow diagrams.
+\end{description}
+
+\end{document}

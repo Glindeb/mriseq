@@ -1,0 +1,31 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install TeX Live
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            texlive-latex-base texlive-latex-recommended texlive-latex-extra \
+            texlive-pictures texlive-fonts-recommended lmodern zip
+      - name: Build manual, examples and release archive
+        run: ./build.sh release
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: mriseq ${{ github.ref_name }}
+          body_path: .github/release-notes.md
+          files: |
+            build/mriseq-*.zip
+            doc/mriseq-doc.pdf
+            tex/mriseq.sty

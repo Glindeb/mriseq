@@ -1,0 +1,4316 @@
+%% mriseq.sty -- MRI pulse sequence diagrams with TikZ
+%%
+%% Author:     Gabriel Lindeblad  (https://github.com/Glindeb/mriseq)
+%% Version:    0.3.0  (2026-11-17)
+%%
+%% Copyright (C) 2026 by Gabriel Lindeblad
+%%
+%% This work may be distributed and/or modified under the conditions of the
+%% LaTeX Project Public License, either version 1.3c of this license or (at
+%% your option) any later version.  The latest version of this license is in
+%%   https://www.latex-project.org/lppl.txt
+%% and version 1.3c or later is part of all distributions of LaTeX version
+%% 2008 or later.
+%%
+%% This work has the LPPL maintenance status `maintained'.
+%% The Current Maintainer of this work is Gabriel Lindeblad.
+%%
+%% Notice on the use of generative AI:
+%%   This package, its documentation and its examples were developed with
+%%   substantial assistance from a generative AI tool (Claude Code, by
+%%   Anthropic), under the direction of the author.  The author is
+%%   responsible for the content.  Please check diagrams that you publish
+%%   and report errors at https://github.com/Glindeb/mriseq/issues.
+%%
+\NeedsTeXFormat{LaTeX2e}[2022-06-01]
+\ProvidesExplPackage{mriseq}{2026-11-17}{0.3.0}
+  {MRI pulse sequence diagrams with TikZ}
+
+\RequirePackage{tikz}
+\ExplSyntaxOff
+\usetikzlibrary{arrows.meta,patterns}
+\ExplSyntaxOn
+
+% =========================================================================
+%  0. Constants and scratch variables
+% =========================================================================
+%  Gyromagnetic ratio of 1H in kHz/mT ( = MHz/T ).
+\fp_const:Nn \c__mriseq_gamma_fp { 42.577478518 }
+
+\fp_new:N \l__mriseq_s_fp      % element start (ms)
+\fp_new:N \l__mriseq_e_fp      % element end   (ms)
+\fp_new:N \l__mriseq_c_fp      % element centre / reference time
+\fp_new:N \l__mriseq_d_fp      % element duration
+\fp_new:N \l__mriseq_amp_fp    % element amplitude
+\fp_new:N \l__mriseq_ru_fp     % ramp up
+\fp_new:N \l__mriseq_rd_fp     % ramp down
+\fp_new:N \l__mriseq_flat_fp   % flat top
+\fp_new:N \l__mriseq_area_fp   % area
+\fp_new:N \l__mriseq_max_fp    % max |amplitude| of the element
+\fp_new:N \l__mriseq_ttwo_fp   % decay constant of signals
+\fp_new:N \l__mriseq_tmpa_fp
+\fp_new:N \l__mriseq_tmpb_fp
+\fp_new:N \l__mriseq_tmpc_fp
+\fp_new:N \l__mriseq_tbw_fp
+\fp_new:N \l__mriseq_k_fp      % cm per ms
+\fp_new:N \l__mriseq_g_fp      % width of a break in (mapped) ms
+\fp_new:N \l__mriseq_mzero_fp     % mapped value of tmin
+\fp_new:N \l__mriseq_tmin_fp
+\fp_new:N \l__mriseq_tmax_fp
+\fp_new:N \l__mriseq_width_fp  % width of the time area in cm
+\fp_new:N \l__mriseq_ytop_fp
+\fp_new:N \l__mriseq_ybot_fp
+\fp_new:N \l__mriseq_yaxis_fp
+\fp_new:N \l__mriseq_header_fp
+\fp_new:N \l__mriseq_step_fp
+\fp_new:N \l__mriseq_xlab_fp
+
+\fp_new:N \g__mriseq_tfirst_fp
+\fp_new:N \g__mriseq_tlast_fp
+\bool_new:N \g__mriseq_any_bool
+\bool_new:N \g__mriseq_markerlabel_bool
+\int_new:N \g__mriseq_toplevels_int
+\int_new:N \g__mriseq_botlevels_int
+\prop_new:N \g__mriseq_max_prop
+\seq_new:N \g__mriseq_occ_seq
+\seq_new:N \g__mriseq_gaps_seq
+\tl_new:N \g__mriseq_items_tl
+
+\seq_new:N \l__mriseq_breaks_seq
+\seq_new:N \l__mriseq_vrows_seq
+\seq_new:N \l__mriseq_tmp_seq
+\tl_new:N \l__mriseq_path_tl
+\tl_new:N \l__mriseq_cmd_tl
+\tl_new:N \l__mriseq_col_tl
+\tl_new:N \l__mriseq_fill_tl
+\tl_new:N \l__mriseq_tmp_tl
+\tl_new:N \l__mriseq_row_tl
+\tl_new:N \l__mriseq_cur_yb_tl
+\tl_new:N \l__mriseq_cur_sc_tl
+\tl_new:N \l__mriseq_cur_h_tl
+\tl_new:N \l__mriseq_cur_ybot_tl
+\tl_new:N \l__mriseq_group_tl
+\tl_new:N \l__mriseq_type_tl
+\clist_new:N \l__mriseq_unknown_clist
+\int_new:N \l__mriseq_n_int
+\dim_new:N \l__mriseq_tmp_dim
+
+\msg_new:nnn { mriseq } { unknown-row }
+  { Row~`#1'~is~not~defined.~Define~it~with~\token_to_str:N \mriseqdefinerow. }
+\msg_new:nnn { mriseq } { te-too-short }
+  { #1~=~#2~ms~is~shorter~than~the~minimum~#3~ms~for~these~parameters. }
+\msg_new:nnn { mriseq } { unknown-style }
+  { Unknown~mriseq~style~`#1'. }
+\msg_new:nnn { mriseq } { nested }
+  { The~mriseq~environment~cannot~be~nested. }
+
+% =========================================================================
+%  1. Number formatting (user hook)
+% =========================================================================
+\cs_new:Npn \mriseqformatnumber #1 { \ensuremath{#1} }
+\int_new:N \l__mriseq_precision_int
+\int_set:Nn \l__mriseq_precision_int { 2 }
+\cs_new:Npn \__mriseq_num:n #1
+  { \exp_not:N \mriseqformatnumber { \fp_eval:n { round( #1 , \l__mriseq_precision_int ) } } }
+
+% =========================================================================
+%  2. Colours and TikZ styles
+% =========================================================================
+\definecolor{mriseq-rf-excite}{HTML}{D6336C}
+\definecolor{mriseq-rf-refocus}{HTML}{3B5BDB}
+\definecolor{mriseq-rf-invert}{HTML}{7048E8}
+\definecolor{mriseq-grad}{HTML}{4A5A75}
+\definecolor{mriseq-phase}{HTML}{0C8599}
+\definecolor{mriseq-adc}{HTML}{E67700}
+\definecolor{mriseq-signal}{HTML}{1864AB}
+\definecolor{mriseq-echo}{HTML}{E09F0B}
+\definecolor{mriseq-marker}{HTML}{868E96}
+\definecolor{mriseq-interval}{HTML}{212529}
+\definecolor{mriseq-text}{HTML}{212529}
+\definecolor{mriseq-sublabel}{HTML}{6C757D}
+\definecolor{mriseq-value}{HTML}{495057}
+\definecolor{mriseq-axis}{HTML}{495057}
+\definecolor{mriseq-baseline}{HTML}{ADB5BD}
+\definecolor{mriseq-grid}{HTML}{EDEFF2}
+\definecolor{mriseq-rowline}{HTML}{DEE2E6}
+\colorlet{mriseq-bg}{white}
+\definecolor{mriseq-area-a}{HTML}{FFD8A8}
+\definecolor{mriseq-area-b}{HTML}{B2F2BB}
+\definecolor{mriseq-area-c}{HTML}{EEBEFA}
+\definecolor{mriseq-area-d}{HTML}{A5D8FF}
+
+\tl_new:N \l__mriseq_rfmix_tl
+\tl_new:N \l__mriseq_gradmix_tl
+\tl_new:N \l__mriseq_adcmix_tl
+\tl_new:N \l__mriseq_sigmix_tl
+\tl_new:N \l__mriseq_gradfill_tl
+\tl_new:N \l__mriseq_rffill_tl
+\tl_new:N \l__mriseq_adcfill_tl
+
+\dim_new:N \l__mriseq_lw_dim
+\dim_new:N \l__mriseq_thin_dim
+\cs_new:Npn \mriseqlinewidth { \dim_use:N \l__mriseq_lw_dim }
+\cs_new:Npn \mriseqthinwidth { \dim_use:N \l__mriseq_thin_dim }
+
+% Font hooks
+\tl_new:N \l__mriseq_labelfont_tl
+\tl_new:N \l__mriseq_sublabelfont_tl
+\tl_new:N \l__mriseq_valuefont_tl
+\tl_new:N \l__mriseq_axisfont_tl
+\tl_new:N \l__mriseq_intervalfont_tl
+\tl_new:N \l__mriseq_flipfont_tl
+\cs_new:Npn \mriseq@labelfont    { \tl_use:N \l__mriseq_labelfont_tl }
+\cs_new:Npn \mriseq@sublabelfont { \tl_use:N \l__mriseq_sublabelfont_tl }
+\cs_new:Npn \mriseq@valuefont    { \tl_use:N \l__mriseq_valuefont_tl }
+\cs_new:Npn \mriseq@axisfont     { \tl_use:N \l__mriseq_axisfont_tl }
+\cs_new:Npn \mriseq@intervalfont { \tl_use:N \l__mriseq_intervalfont_tl }
+\cs_new:Npn \mriseq@flipfont     { \tl_use:N \l__mriseq_flipfont_tl }
+
+\ExplSyntaxOff
+\tikzset{
+  mriseq/line/.style     = {line width=\mriseqlinewidth, line join=round, line cap=round},
+  mriseq/thin/.style     = {line width=\mriseqthinwidth},
+  mriseq/rf/.style       = {mriseq/line},
+  mriseq/rf fill/.style  = {draw=none},
+  mriseq/grad/.style     = {mriseq/line},
+  mriseq/phase/.style    = {mriseq/line},
+  mriseq/phase lines/.style = {mriseq/thin},
+  mriseq/phase highlight/.style = {mriseq/line, draw=mriseq-phase, line width=1.4\pgflinewidth},
+  mriseq/phase arrow/.style = {mriseq/thin, draw=mriseq-phase, -{Stealth[length=4pt]}},
+  mriseq/adc/.style      = {mriseq/line},
+  mriseq/adc ticks/.style = {line width=0.25pt},
+  mriseq/kzero/.style    = {mriseq/thin, draw=mriseq-adc, fill=white},
+  mriseq/signal/.style   = {mriseq/line},
+  mriseq/wave/.style     = {mriseq/line},
+  mriseq/marker/.style   = {mriseq/thin, dash pattern=on 2pt off 1.5pt},
+  mriseq/echo marker/.style = {mriseq/thin, dash pattern=on 2pt off 1.5pt, draw=mriseq-echo},
+  mriseq/marker label/.style = {font=\mriseq@valuefont, text=mriseq-text, inner sep=1pt, fill=mriseq-bg},
+  mriseq/interval/.style = {mriseq/thin, draw=mriseq-interval, {Stealth[length=3.5pt]}-{Stealth[length=3.5pt]}},
+  mriseq/interval label/.style = {font=\mriseq@intervalfont, text=mriseq-interval, inner sep=1.5pt},
+  mriseq/guide/.style    = {line width=0.3pt, draw=mriseq-marker, dash pattern=on 0.6pt off 1.2pt},
+  mriseq/baseline/.style = {mriseq/thin, draw=mriseq-baseline},
+  mriseq/grid/.style     = {line width=0.3pt, draw=mriseq-grid},
+  mriseq/row line/.style = {line width=0.3pt, draw=mriseq-rowline},
+  mriseq/axis/.style     = {mriseq/thin, draw=mriseq-axis},
+  mriseq/axis arrow/.style = {mriseq/thin, draw=mriseq-axis, -{Stealth[length=4pt]}},
+  mriseq/tick label/.style = {font=\mriseq@axisfont, text=mriseq-axis, inner sep=1.5pt},
+  mriseq/row label/.style = {font=\mriseq@labelfont, text=mriseq-text, align=left, inner sep=0pt},
+  mriseq/value/.style    = {font=\mriseq@valuefont, text=mriseq-value, inner sep=1.2pt},
+  mriseq/value outside/.style = {fill=mriseq-bg},
+  mriseq/value inside/.style = {},
+  mriseq/flip label/.style = {font=\mriseq@flipfont, text=mriseq-text, inner sep=1.2pt, fill=mriseq-bg},
+  mriseq/break/.style    = {mriseq/thin, draw=mriseq-axis},
+  mriseq/area A/.style = {fill=mriseq-area-a},
+  mriseq/area B/.style = {fill=mriseq-area-b},
+  mriseq/area C/.style = {fill=mriseq-area-c},
+  mriseq/area D/.style = {fill=mriseq-area-d},
+  mriseq/area label/.style = {},
+  mriseq/kspace frame/.style = {mriseq/thin, draw=mriseq-axis},
+  mriseq/kspace axes/.style  = {line width=0.3pt, draw=mriseq-baseline!60},
+  mriseq/kspace path/.style  = {mriseq/thin, draw=mriseq-k, line join=round, line cap=round},
+  mriseq/kspace adc/.style   = {mriseq/line, draw=mriseq-adc, line join=round, line cap=round},
+  mriseq/kspace jump/.style  = {mriseq/thin, draw=mriseq-k, dash pattern=on 0.6pt off 1.4pt},
+  mriseq/kspace origin/.style = {fill=mriseq-axis},
+  mriseq/kspace label/.style = {font=\mriseq@axisfont, text=mriseq-axis, inner sep=2pt},
+  mriseq/kspace title/.style = {font=\mriseq@axisfont, text=mriseq-text, inner sep=2pt},
+}
+\ExplSyntaxOn
+
+% =========================================================================
+%  3. Rows
+% =========================================================================
+\tl_new:N \l__mriseq_rowname_tl
+\cs_new_protected:Npn \__mriseq_row_ensure:n #1
+  {
+    \tl_if_exist:cF { l__mriseq_row_#1_label_tl }
+      {
+        \tl_new:c { l__mriseq_row_#1_label_tl }
+        \tl_new:c { l__mriseq_row_#1_sub_tl }
+        \tl_new:c { l__mriseq_row_#1_height_tl }
+        \tl_new:c { l__mriseq_row_#1_base_tl }
+        \tl_new:c { l__mriseq_row_#1_group_tl }
+        \tl_new:c { l__mriseq_row_#1_yb_tl }
+        \tl_new:c { l__mriseq_row_#1_sc_tl }
+        \tl_new:c { l__mriseq_row_#1_ytop_tl }
+        \tl_new:c { l__mriseq_row_#1_ybot_tl }
+        \tl_set:cn { l__mriseq_row_#1_label_tl } {#1}
+        \tl_set:cn { l__mriseq_row_#1_height_tl } { 1.2cm }
+        \tl_set:cn { l__mriseq_row_#1_base_tl } { 0.5 }
+        \tl_set:cn { l__mriseq_row_#1_group_tl } {#1}
+      }
+  }
+\keys_define:nn { mriseq / row }
+  {
+    label    .code:n = \tl_set:cn { l__mriseq_row_ \l__mriseq_rowname_tl _label_tl } {#1} ,
+    sublabel .code:n = \tl_set:cn { l__mriseq_row_ \l__mriseq_rowname_tl _sub_tl } {#1} ,
+    height   .code:n = \tl_set:cn { l__mriseq_row_ \l__mriseq_rowname_tl _height_tl } {#1} ,
+    baseline .code:n = \tl_set:cn { l__mriseq_row_ \l__mriseq_rowname_tl _base_tl } {#1} ,
+    group    .code:n = \tl_set:cn { l__mriseq_row_ \l__mriseq_rowname_tl _group_tl } {#1} ,
+  }
+\NewDocumentCommand \mriseqdefinerow { m m }
+  {
+    \tl_set:Ne \l__mriseq_rowname_tl { \tl_trim_spaces:n {#1} }
+    \__mriseq_row_ensure:V \l__mriseq_rowname_tl
+    \keys_set:nn { mriseq / row } {#2}
+  }
+\cs_generate_variant:Nn \__mriseq_row_ensure:n { V , e }
+\cs_new_eq:NN \mriseqrow \mriseqdefinerow
+
+\ExplSyntaxOff
+\mriseqdefinerow{rf}{label=RF, height=1.5cm, baseline=0.22, group=rf}
+\mriseqdefinerow{gz}{label=$G_z$, sublabel=slice, group=grad}
+\mriseqdefinerow{gy}{label=$G_y$, sublabel=phase, group=grad}
+\mriseqdefinerow{gx}{label=$G_x$, sublabel=read, group=grad}
+\mriseqdefinerow{adc}{label=ADC, height=0.75cm, group=adc}
+\mriseqdefinerow{sig}{label=Signal, height=1.2cm, group=sig}
+\mriseqdefinerow{mz}{label=$M_z$, height=1.2cm, group=mz}
+\mriseqdefinerow{kx}{label=$k_x$, height=1.0cm, group=kx}
+\mriseqdefinerow{ky}{label=$k_y$, height=1.0cm, group=ky}
+\mriseqdefinerow{kz}{label=$k_z$, height=1.0cm, group=kz}
+\ExplSyntaxOn
+
+% =========================================================================
+%  4. Diagram keys
+% =========================================================================
+\clist_new:N \l__mriseq_rows_clist
+\tl_new:N \l__mriseq_tmin_tl
+\tl_new:N \l__mriseq_tmax_tl
+\tl_new:N \l__mriseq_xscale_tl
+\tl_new:N \l__mriseq_breakstyle_tl
+\tl_new:N \l__mriseq_tickstep_tl
+\tl_new:N \l__mriseq_axislabel_tl
+\tl_new:N \l__mriseq_timelabel_tl
+\tl_new:N \l__mriseq_gradunit_tl
+\tl_new:N \l__mriseq_areaunit_tl
+\tl_new:N \l__mriseq_tikz_tl
+\tl_new:N \l__mriseq_rfdur_tl
+\tl_new:N \l__mriseq_ramp_tl
+\tl_new:N \l__mriseq_tbw_tl
+\tl_new:N \l__mriseq_window_tl
+\tl_new:N \l__mriseq_shape_tl
+\tl_new:N \l__mriseq_res_tl
+\tl_new:N \l__mriseq_max_grad_tl
+\tl_new:N \l__mriseq_max_rf_tl
+\tl_new:N \l__mriseq_max_sig_tl
+\tl_new:N \l__mriseq_width_tl
+\dim_new:N \l__mriseq_labelwidth_dim
+\dim_new:N \l__mriseq_breakwidth_dim
+\dim_new:N \l__mriseq_intervalsep_dim
+\dim_new:N \l__mriseq_markerspace_dim
+\fp_new:N \l__mriseq_rowscale_fp
+\fp_new:N \l__mriseq_pad_fp
+\fp_new:N \l__mriseq_threshold_fp
+\fp_new:N \l__mriseq_margin_fp
+\fp_new:N \l__mriseq_ampfill_fp
+\tl_new:N \l__mriseq_ampfill_tl
+\bool_new:N \l__mriseq_axis_bool
+\bool_new:N \l__mriseq_ticks_bool
+\bool_new:N \l__mriseq_grid_bool
+\bool_new:N \l__mriseq_rowlines_bool
+\bool_new:N \l__mriseq_baselines_bool
+\bool_new:N \l__mriseq_rowlabels_bool
+\bool_new:N \l__mriseq_compress_bool
+\bool_new:N \l__mriseq_amplabels_bool
+\bool_new:N \l__mriseq_arealabels_bool
+\bool_new:N \l__mriseq_adclabels_bool
+\bool_new:N \l__mriseq_fliplabels_bool
+\bool_new:N \l__mriseq_markers_bool
+\bool_new:N \l__mriseq_inenv_bool
+\bool_new:N \l__mriseq_gradrow_bool
+
+\cs_new_protected:Npn \__mriseq_parse_time:n #1
+  {
+    \seq_set_split:Nee \l__mriseq_tmp_seq { \c_colon_str } { \tl_to_str:n {#1} }
+    \tl_set:Ne \l__mriseq_tmin_tl { \seq_item:Nn \l__mriseq_tmp_seq { 1 } }
+    \tl_set:Ne \l__mriseq_tmax_tl { \seq_item:Nn \l__mriseq_tmp_seq { 2 } }
+  }
+\cs_generate_variant:Nn \seq_set_split:Nnn { Nee }
+
+\cs_new_protected:Npn \__mriseq_set_grad_labels:n #1
+  {
+    \cs_if_exist_use:cF { mriseq@gradlabels@ #1 }
+      { \msg_error:nnn { mriseq } { unknown-style } {#1} }
+  }
+\ExplSyntaxOff
+\def\mriseq@gradlabels@physical{%
+  \mriseqdefinerow{gz}{label=$G_z$, sublabel=slice}%
+  \mriseqdefinerow{gy}{label=$G_y$, sublabel=phase}%
+  \mriseqdefinerow{gx}{label=$G_x$, sublabel=read}}
+\def\mriseq@gradlabels@logical{%
+  \mriseqdefinerow{gz}{label=$G_{\mathrm{SS}}$, sublabel={}}%
+  \mriseqdefinerow{gy}{label=$G_{\mathrm{PE}}$, sublabel={}}%
+  \mriseqdefinerow{gx}{label=$G_{\mathrm{RO}}$, sublabel={}}}
+\def\mriseq@gradlabels@plain{%
+  \mriseqdefinerow{gz}{label=$G_z$, sublabel={}}%
+  \mriseqdefinerow{gy}{label=$G_y$, sublabel={}}%
+  \mriseqdefinerow{gx}{label=$G_x$, sublabel={}}}
+\def\mriseq@gradlabels@words{%
+  \mriseqdefinerow{gz}{label=$G_{\mathrm{slice}}$, sublabel={}}%
+  \mriseqdefinerow{gy}{label=$G_{\mathrm{phase}}$, sublabel={}}%
+  \mriseqdefinerow{gx}{label=$G_{\mathrm{read}}$, sublabel={}}}
+\ExplSyntaxOn
+
+\prop_new:N \g__mriseq_styles_prop
+\cs_new_protected:Npn \__mriseq_use_style:n #1
+  {
+    \prop_get:NnNTF \g__mriseq_styles_prop {#1} \l__mriseq_tmp_tl
+      { \keys_set:nV { mriseq } \l__mriseq_tmp_tl }
+      { \msg_error:nnn { mriseq } { unknown-style } {#1} }
+  }
+\cs_generate_variant:Nn \keys_set:nn { nV }
+\NewDocumentCommand \mriseqdefinestyle { m m }
+  { \prop_gput:Nnn \g__mriseq_styles_prop {#1} {#2} }
+
+\cs_new_protected:Npn \__mriseq_colorkey:nn #1#2 { \colorlet{#1}{#2} }
+
+\keys_define:nn { mriseq }
+  {
+    style        .code:n = \__mriseq_use_style:n {#1} ,
+    rows         .clist_set:N = \l__mriseq_rows_clist ,
+    rows         .initial:n = { rf , gz , gy , gx , adc , sig } ,
+    time         .code:n = \__mriseq_parse_time:n {#1} ,
+    tmin         .tl_set:N = \l__mriseq_tmin_tl ,
+    tmax         .tl_set:N = \l__mriseq_tmax_tl ,
+    time~pad     .fp_set:N = \l__mriseq_pad_fp ,
+    time~pad     .initial:n = 0.4 ,
+    width        .tl_set:N = \l__mriseq_width_tl ,
+    width        .initial:n = \linewidth ,
+    xscale       .tl_set:N = \l__mriseq_xscale_tl ,
+    label~width  .dim_set:N = \l__mriseq_labelwidth_dim ,
+    label~width  .initial:n = 1.3cm ,
+    row~scale    .fp_set:N = \l__mriseq_rowscale_fp ,
+    row~scale    .initial:n = 1 ,
+    grad~scale   .choice: ,
+    grad~scale / shared .code:n = \bool_set_false:N \l__mriseq_gradrow_bool ,
+    grad~scale / row    .code:n = \bool_set_true:N \l__mriseq_gradrow_bool ,
+    amp~fill     .tl_set:N = \l__mriseq_ampfill_tl ,
+    amp~fill     .initial:n = auto ,
+    grad~labels  .code:n = \__mriseq_set_grad_labels:n {#1} ,
+    axis         .bool_set:N = \l__mriseq_axis_bool ,
+    ticks        .bool_set:N = \l__mriseq_ticks_bool ,
+    tick~step    .tl_set:N = \l__mriseq_tickstep_tl ,
+    axis~label   .tl_set:N = \l__mriseq_axislabel_tl ,
+    axis~label   .initial:n = ms ,
+    time~label   .tl_set:N = \l__mriseq_timelabel_tl ,
+    time~label   .initial:n = $t$ ,
+    grid         .bool_set:N = \l__mriseq_grid_bool ,
+    row~lines    .bool_set:N = \l__mriseq_rowlines_bool ,
+    baselines    .bool_set:N = \l__mriseq_baselines_bool ,
+    baselines    .initial:n = true ,
+    row~labels   .bool_set:N = \l__mriseq_rowlabels_bool ,
+    row~labels   .initial:n = true ,
+    compress     .bool_set:N = \l__mriseq_compress_bool ,
+    compress     .initial:n = true ,
+    compress~threshold .fp_set:N = \l__mriseq_threshold_fp ,
+    compress~threshold .initial:n = 8 ,
+    break~margin .fp_set:N = \l__mriseq_margin_fp ,
+    break~margin .initial:n = 0.6 ,
+    break~style  .tl_set:N = \l__mriseq_breakstyle_tl ,
+    break~style  .initial:n = slash ,
+    break~width  .dim_set:N = \l__mriseq_breakwidth_dim ,
+    break~width  .initial:n = 0.5cm ,
+    interval~sep .dim_set:N = \l__mriseq_intervalsep_dim ,
+    interval~sep .initial:n = 0.5cm ,
+    marker~space .dim_set:N = \l__mriseq_markerspace_dim ,
+    marker~space .initial:n = 0.35cm ,
+    amp~labels   .bool_set:N = \l__mriseq_amplabels_bool ,
+    area~labels  .bool_set:N = \l__mriseq_arealabels_bool ,
+    adc~labels   .bool_set:N = \l__mriseq_adclabels_bool ,
+    flip~labels  .bool_set:N = \l__mriseq_fliplabels_bool ,
+    flip~labels  .initial:n = true ,
+    values       .meta:n = { amp~labels = #1 , area~labels = #1 , adc~labels = #1 } ,
+    values       .default:n = true ,
+    markers      .bool_set:N = \l__mriseq_markers_bool ,
+    markers      .initial:n = true ,
+    precision    .int_set:N = \l__mriseq_precision_int ,
+    grad~unit    .tl_set:N = \l__mriseq_gradunit_tl ,
+    grad~unit    .initial:n = mT/m ,
+    area~unit    .tl_set:N = \l__mriseq_areaunit_tl ,
+    grad~max     .tl_set:N = \l__mriseq_max_grad_tl ,
+    rf~max       .tl_set:N = \l__mriseq_max_rf_tl ,
+    signal~max   .tl_set:N = \l__mriseq_max_sig_tl ,
+    tikz         .tl_set:N = \l__mriseq_tikz_tl ,
+    % defaults for elements
+    ramp         .tl_set:N = \l__mriseq_ramp_tl ,
+    ramp         .initial:n = 0.2 ,
+    rf~dur       .tl_set:N = \l__mriseq_rfdur_tl ,
+    rf~dur       .initial:n = 2 ,
+    tbw          .tl_set:N = \l__mriseq_tbw_tl ,
+    tbw          .initial:n = 4 ,
+    rf~window    .tl_set:N = \l__mriseq_window_tl ,
+    rf~window    .initial:n = hamming ,
+    rf~shape     .tl_set:N = \l__mriseq_shape_tl ,
+    rf~shape     .initial:n = sinc ,
+    resolution   .tl_set:N = \l__mriseq_res_tl ,
+    resolution   .initial:n = 32 ,
+    % presets of detail
+    schematic    .meta:n = { values = false , ticks = false , axis = false , grid = false } ,
+    schematic    .value_forbidden:n = true ,
+    detailed     .meta:n = { values = true , ticks = true , grid = true } ,
+    detailed     .value_forbidden:n = true ,
+    % size presets
+    compact      .meta:n = { label~width = 0.95cm , row~scale = 0.72 , line~width = 0.55pt ,
+                             thin~line~width = 0.35pt ,
+                             label~font = \footnotesize , sublabel~font = { \tiny \color{mriseq-sublabel} } ,
+                             value~font = \tiny , axis~font = \tiny , interval~font = \scriptsize ,
+                             flip~font = \scriptsize , interval~sep = 0.4cm , marker~space = 0.3cm ,
+                             break~width = 0.35cm , kspace~size = 2.6cm , kspace~gap = 0.6cm } ,
+    compact      .value_forbidden:n = true ,
+    avoid~overlaps .bool_set:N = \l__mriseq_avoid_bool ,
+    avoid~overlaps .initial:n = true ,
+    auto~compact .tl_set:N = \l__mriseq_autocompact_tl ,
+    auto~compact .initial:n = 9cm ,
+    % appearance
+    line~width   .dim_set:N = \l__mriseq_lw_dim ,
+    line~width   .initial:n = 0.7pt ,
+    thin~line~width .dim_set:N = \l__mriseq_thin_dim ,
+    thin~line~width .initial:n = 0.4pt ,
+    label~font   .tl_set:N = \l__mriseq_labelfont_tl ,
+    label~font   .initial:n = \small ,
+    sublabel~font .tl_set:N = \l__mriseq_sublabelfont_tl ,
+    sublabel~font .initial:n = { \scriptsize \color{mriseq-sublabel} } ,
+    value~font   .tl_set:N = \l__mriseq_valuefont_tl ,
+    value~font   .initial:n = \scriptsize ,
+    axis~font    .tl_set:N = \l__mriseq_axisfont_tl ,
+    axis~font    .initial:n = \scriptsize ,
+    interval~font .tl_set:N = \l__mriseq_intervalfont_tl ,
+    interval~font .initial:n = \footnotesize ,
+    flip~font    .tl_set:N = \l__mriseq_flipfont_tl ,
+    flip~font    .initial:n = \footnotesize ,
+    rf~fill~mix   .tl_set:N = \l__mriseq_rfmix_tl ,
+    rf~fill~mix   .initial:n = 22 ,
+    grad~fill~mix .tl_set:N = \l__mriseq_gradmix_tl ,
+    grad~fill~mix .initial:n = 18 ,
+    adc~fill~mix  .tl_set:N = \l__mriseq_adcmix_tl ,
+    adc~fill~mix  .initial:n = 12 ,
+    signal~fill~mix .tl_set:N = \l__mriseq_sigmix_tl ,
+    signal~fill~mix .initial:n = 25 ,
+    grad~fill     .tl_set:N = \l__mriseq_gradfill_tl ,
+    rf~fill       .tl_set:N = \l__mriseq_rffill_tl ,
+    adc~fill      .tl_set:N = \l__mriseq_adcfill_tl ,
+    rf~excite~color  .code:n = \__mriseq_colorkey:nn { mriseq-rf-excite } {#1} ,
+    rf~refocus~color .code:n = \__mriseq_colorkey:nn { mriseq-rf-refocus } {#1} ,
+    rf~invert~color  .code:n = \__mriseq_colorkey:nn { mriseq-rf-invert } {#1} ,
+    rf~color      .meta:n = { rf~excite~color = #1 , rf~refocus~color = #1 , rf~invert~color = #1 } ,
+    grad~color    .code:n = \__mriseq_colorkey:nn { mriseq-grad } {#1} ,
+    phase~color   .code:n = \__mriseq_colorkey:nn { mriseq-phase } {#1} ,
+    adc~color     .code:n = \__mriseq_colorkey:nn { mriseq-adc } {#1} ,
+    signal~color  .code:n = \__mriseq_colorkey:nn { mriseq-signal } {#1} ,
+    echo~color    .code:n = \__mriseq_colorkey:nn { mriseq-echo } {#1} ,
+    marker~color  .code:n = \__mriseq_colorkey:nn { mriseq-marker } {#1} ,
+    interval~color .code:n = \__mriseq_colorkey:nn { mriseq-interval } {#1} ,
+    text~color    .code:n = \__mriseq_colorkey:nn { mriseq-text } {#1} ,
+    sublabel~color .code:n = \__mriseq_colorkey:nn { mriseq-sublabel } {#1} ,
+    value~color   .code:n = \__mriseq_colorkey:nn { mriseq-value } {#1} ,
+    axis~color    .code:n = \__mriseq_colorkey:nn { mriseq-axis } {#1} ,
+    baseline~color .code:n = \__mriseq_colorkey:nn { mriseq-baseline } {#1} ,
+    grid~color    .code:n = \__mriseq_colorkey:nn { mriseq-grid } {#1} ,
+    row~line~color .code:n = \__mriseq_colorkey:nn { mriseq-rowline } {#1} ,
+    background~color .code:n = \__mriseq_colorkey:nn { mriseq-bg } {#1} ,
+    area~A~style .code:n = \tikzset { mriseq/area~A/.style = {#1} } ,
+    area~B~style .code:n = \tikzset { mriseq/area~B/.style = {#1} } ,
+    area~C~style .code:n = \tikzset { mriseq/area~C/.style = {#1} } ,
+    area~D~style .code:n = \tikzset { mriseq/area~D/.style = {#1} } ,
+    % row definitions from within options:  row/gz = {label=...}
+    row          .code:n = \__mriseq_row_key:n {#1} ,
+  }
+\cs_new_protected:Npn \__mriseq_row_key:n #1 { \__mriseq_row_key:nn #1 }
+\cs_new_protected:Npn \__mriseq_row_key:nn #1#2 { \mriseqdefinerow {#1} {#2} }
+
+% ---- built-in styles ----------------------------------------------------
+\prop_gput:Nnn \g__mriseq_styles_prop { color }
+  {
+    rf~excite~color = {rgb,255:red,214;green,51;blue,108} ,
+    rf~refocus~color = {rgb,255:red,59;green,91;blue,219} ,
+    rf~invert~color = {rgb,255:red,112;green,72;blue,232} ,
+    grad~color = {rgb,255:red,74;green,90;blue,117} ,
+    phase~color = {rgb,255:red,12;green,133;blue,153} ,
+    k~color = {rgb,255:red,12;green,133;blue,153} ,
+    adc~color = {rgb,255:red,230;green,119;blue,0} ,
+    signal~color = {rgb,255:red,24;green,100;blue,171} ,
+    echo~color = {rgb,255:red,224;green,159;blue,11} ,
+    marker~color = {rgb,255:red,134;green,142;blue,150} ,
+    interval~color = {rgb,255:red,33;green,37;blue,41} ,
+    text~color = {rgb,255:red,33;green,37;blue,41} ,
+    sublabel~color = {rgb,255:red,108;green,117;blue,125} ,
+    value~color = {rgb,255:red,73;green,80;blue,87} ,
+    axis~color = {rgb,255:red,73;green,80;blue,87} ,
+    baseline~color = {rgb,255:red,173;green,181;blue,189} ,
+    grid~color = {rgb,255:red,237;green,239;blue,242} ,
+    row~line~color = {rgb,255:red,222;green,226;blue,230} ,
+    rf~fill~mix = 22 , grad~fill~mix = 18 , adc~fill~mix = 12 , signal~fill~mix = 25 ,
+    rf~fill = {} , grad~fill = {} , adc~fill = {} ,
+    line~width = 0.7pt , thin~line~width = 0.4pt ,
+    row~lines = true , grid = false ,
+    area~A~style = { fill = mriseq-area-a } , area~B~style = { fill = mriseq-area-b } ,
+    area~C~style = { fill = mriseq-area-c } , area~D~style = { fill = mriseq-area-d } ,
+    background~color = white
+  }
+\prop_gput:Nnn \g__mriseq_styles_prop { bw }
+  {
+    rf~color = black , grad~color = black , phase~color = black , k~color = black ,
+    adc~color = black , signal~color = black , echo~color = black ,
+    marker~color = black , interval~color = black , text~color = black ,
+    sublabel~color = black , value~color = black , axis~color = black ,
+    baseline~color = black , grid~color = black!12 , row~line~color = black!25 ,
+    rf~fill~mix = 30 , grad~fill~mix = 25 , adc~fill~mix = 12 , signal~fill~mix = 25 ,
+    rf~fill = {} , grad~fill = {} , adc~fill = {} ,
+    line~width = 0.6pt , thin~line~width = 0.35pt ,
+    row~lines = false , grid = false ,
+    area~A~style = { fill = white , postaction = { pattern = north~east~lines } } ,
+    area~B~style = { fill = white , postaction = { pattern = north~west~lines } } ,
+    area~C~style = { fill = white , postaction = { pattern = crosshatch~dots } } ,
+    area~D~style = { fill = white , postaction = { pattern = horizontal~lines } } ,
+    background~color = white
+  }
+\prop_gput:Nnn \g__mriseq_styles_prop { grayscale }
+  {
+    rf~excite~color = black , rf~refocus~color = black!70 , rf~invert~color = black!50 ,
+    grad~color = black!80 , phase~color = black , adc~color = black!70 , k~color = black!60 ,
+    signal~color = black , echo~color = black!60 ,
+    marker~color = black!45 , interval~color = black , text~color = black ,
+    sublabel~color = black!65 , value~color = black!75 , axis~color = black!80 ,
+    baseline~color = black!40 , grid~color = black!8 , row~line~color = black!15 ,
+    rf~fill~mix = 25 , grad~fill~mix = 20 , adc~fill~mix = 10 , signal~fill~mix = 20 ,
+    rf~fill = {} , grad~fill = {} , adc~fill = {} ,
+    line~width = 0.6pt , thin~line~width = 0.35pt ,
+    row~lines = true , grid = false ,
+    area~A~style = { fill = black!35 } , area~B~style = { fill = black!12 , postaction = { pattern = north~east~lines } } ,
+    area~C~style = { fill = black!55 } , area~D~style = { fill = white , postaction = { pattern = crosshatch~dots } } ,
+    background~color = white
+  }
+
+\NewDocumentCommand \mriseqset { m } { \__mriseq_set:n {#1} }
+\cs_new_protected:Npn \__mriseq_set:n #1
+  {
+    \keys_set_known:nnN { mriseq / seq } {#1} \l__mriseq_unknown_clist
+    \keys_set:nV { mriseq } \l__mriseq_unknown_clist
+  }
+
+% =========================================================================
+%  5. Element keys
+% =========================================================================
+\keys_define:nn { mriseq / el }
+  {
+    start    .tl_set:N = \l__mriseq_el_start_tl ,
+    center   .tl_set:N = \l__mriseq_el_center_tl ,
+    at       .tl_set:N = \l__mriseq_el_center_tl ,
+    end      .tl_set:N = \l__mriseq_el_end_tl ,
+    dur      .tl_set:N = \l__mriseq_el_dur_tl ,
+    amp      .tl_set:N = \l__mriseq_el_amp_tl ,
+    flat     .tl_set:N = \l__mriseq_el_flat_tl ,
+    ramp     .code:n   = \tl_set:Nn \l__mriseq_el_ru_tl {#1}
+                         \tl_set:Nn \l__mriseq_el_rd_tl {#1} ,
+    ramp~up  .tl_set:N = \l__mriseq_el_ru_tl ,
+    ramp~down .tl_set:N = \l__mriseq_el_rd_tl ,
+    area     .tl_set:N = \l__mriseq_el_area_tl ,
+    flip     .tl_set:N = \l__mriseq_el_flip_tl ,
+    phase    .tl_set:N = \l__mriseq_el_phase_tl ,
+    label    .tl_set:N = \l__mriseq_el_label_tl ,
+    shape    .tl_set:N = \l__mriseq_el_shape_tl ,
+    tbw      .tl_set:N = \l__mriseq_el_tbw_tl ,
+    window   .tl_set:N = \l__mriseq_el_window_tl ,
+    resolution .tl_set:N = \l__mriseq_el_res_tl ,
+    lines    .tl_set:N = \l__mriseq_el_lines_tl ,
+    lines    .initial:n = 9 ,
+    arrow    .tl_set:N = \l__mriseq_el_arrow_tl ,
+    arrow    .default:n = down ,
+    highlight .tl_set:N = \l__mriseq_el_highlight_tl ,
+    fan      .bool_set:N = \l__mriseq_el_fan_bool ,
+    color    .tl_set:N = \l__mriseq_el_color_tl ,
+    fill     .tl_set:N = \l__mriseq_el_fill_tl ,
+    style    .tl_set:N = \l__mriseq_el_style_tl ,
+    role     .tl_set:N = \l__mriseq_el_role_tl ,
+    split    .tl_set:N = \l__mriseq_el_split_tl ,
+    t2       .tl_set:N = \l__mriseq_el_ttwo_tl ,
+    decay    .tl_set:N = \l__mriseq_el_ttwo_tl ,
+    cycles   .tl_set:N = \l__mriseq_el_cycles_tl ,
+    cycles   .initial:n = 3 ,
+    oscillate .bool_set:N = \l__mriseq_el_osc_bool ,
+    oscillate .initial:n = true ,
+    filled   .bool_set:N = \l__mriseq_el_filled_bool ,
+    filled   .initial:n = true ,
+    samples  .tl_set:N = \l__mriseq_el_samples_tl ,
+    dwell    .tl_set:N = \l__mriseq_el_dwell_tl ,
+    kzero    .tl_set:N = \l__mriseq_el_kzero_tl ,
+    sample~ticks .bool_set:N = \l__mriseq_el_ticks_bool ,
+    sample~ticks .initial:n = true ,
+    points   .tl_set:N = \l__mriseq_el_points_tl ,
+    kind     .tl_set:N = \l__mriseq_el_kind_tl ,
+    from     .tl_set:N = \l__mriseq_el_from_tl ,
+    to       .tl_set:N = \l__mriseq_el_to_tl ,
+    level    .tl_set:N = \l__mriseq_el_level_tl ,
+    level    .initial:n = 1 ,
+    pos      .tl_set:N = \l__mriseq_el_pos_tl ,
+    pos      .initial:n = top ,
+    row      .tl_set:N = \l__mriseq_el_row_tl ,
+    height   .tl_set:N = \l__mriseq_el_height_tl ,
+    height   .initial:n = 0.5 ,
+    guides   .bool_set:N = \l__mriseq_el_guides_bool ,
+    guides   .initial:n = true ,
+    code     .tl_set:N = \l__mriseq_el_code_tl ,
+    group    .tl_set:N = \l__mriseq_el_group_tl ,
+    occupy   .bool_set:N = \l__mriseq_el_occupy_bool ,
+    occupy   .initial:n = true ,
+    % per element overrides of the global switches
+    values      .meta:nn = { mriseq } { values = #1 } ,
+    values      .default:n = true ,
+    amp~labels  .bool_set:N = \l__mriseq_amplabels_bool ,
+    area~labels .bool_set:N = \l__mriseq_arealabels_bool ,
+    adc~labels  .bool_set:N = \l__mriseq_adclabels_bool ,
+    flip~labels .bool_set:N = \l__mriseq_fliplabels_bool ,
+  }
+
+% ---- helpers ------------------------------------------------------------
+%  \__mriseq_fp_set:Nnn <fp> {<tl value>} {<default expr>}
+\cs_new_protected:Npn \__mriseq_fp_set:Nnn #1#2#3
+  { \tl_if_blank:nTF {#2} { \fp_set:Nn #1 {#3} } { \fp_set:Nn #1 {#2} } }
+\cs_generate_variant:Nn \__mriseq_fp_set:Nnn { NVn , NVV }
+
+%  Resolve the start time from start / center / end keys.
+%  #1 = total duration expression, #2 = offset of the reference "centre".
+\cs_new_protected:Npn \__mriseq_resolve_start:nn #1#2
+  {
+    \tl_if_blank:VTF \l__mriseq_el_start_tl
+      {
+        \tl_if_blank:VTF \l__mriseq_el_center_tl
+          {
+            \tl_if_blank:VTF \l__mriseq_el_end_tl
+              { \fp_set:Nn \l__mriseq_s_fp { 0 } }
+              { \fp_set:Nn \l__mriseq_s_fp { (\l__mriseq_el_end_tl) - (#1) } }
+          }
+          { \fp_set:Nn \l__mriseq_s_fp { (\l__mriseq_el_center_tl) - (#2) } }
+      }
+      { \fp_set:Nn \l__mriseq_s_fp { \l__mriseq_el_start_tl } }
+    \fp_set:Nn \l__mriseq_e_fp { \l__mriseq_s_fp + (#1) }
+  }
+
+% =========================================================================
+%  6. Computation of element geometry (shared by measure and draw)
+% =========================================================================
+\cs_new_protected:Npn \__mriseq_compute:n #1
+  { \cs_if_exist_use:c { __mriseq_compute_#1: } }
+
+%  mean value of the current pulse shape over its duration -> #1
+\prop_new:N \g__mriseq_mean_prop
+\cs_new_protected:Npn \__mriseq_shape_mean:N #1
+  {
+    \tl_set:Ne \l__mriseq_tmp_tl
+      { \l__mriseq_el_shape_tl | \l__mriseq_el_window_tl | \fp_eval:n { \l__mriseq_tbw_fp } }
+    \prop_get:NVNTF \g__mriseq_mean_prop \l__mriseq_tmp_tl \l__mriseq_fill_tl
+      { \fp_set:Nn #1 { \l__mriseq_fill_tl } }
+      {
+        \str_if_eq:VnTF \l__mriseq_el_shape_tl { hard }
+          { \fp_set:Nn #1 { 1 } }
+          {
+            \fp_set:Nn #1 { 0 }
+            \int_step_inline:nnn { 0 } { 64 }
+              {
+                \fp_add:Nn #1
+                  { \use:c { __mriseq_shape_ \l__mriseq_el_shape_tl :n } { -0.5 + ##1 / 64 } }
+              }
+            \fp_set:Nn #1 { #1 / 65 }
+          }
+        \prop_gput:NVe \g__mriseq_mean_prop \l__mriseq_tmp_tl { \fp_eval:n {#1} }
+      }
+  }
+\prg_generate_conditional_variant:Nnn \prop_get:NnN { NV } { TF }
+\cs_new_protected:cpn { __mriseq_compute_rf: }
+  {
+    \tl_if_blank:VT \l__mriseq_el_shape_tl
+      { \tl_set_eq:NN \l__mriseq_el_shape_tl \l__mriseq_shape_tl }
+    \tl_if_blank:VT \l__mriseq_el_window_tl
+      { \tl_set_eq:NN \l__mriseq_el_window_tl \l__mriseq_window_tl }
+    \tl_if_blank:VT \l__mriseq_el_res_tl
+      { \tl_set_eq:NN \l__mriseq_el_res_tl \l__mriseq_res_tl }
+    \__mriseq_fp_set:NVV \l__mriseq_d_fp \l__mriseq_el_dur_tl \l__mriseq_rfdur_tl
+    \__mriseq_resolve_start:nn { \l__mriseq_d_fp } { \l__mriseq_d_fp / 2 }
+    \fp_set:Nn \l__mriseq_c_fp { \l__mriseq_s_fp + \l__mriseq_d_fp / 2 }
+    \tl_if_blank:VTF \l__mriseq_el_amp_tl
+      {
+        \tl_if_blank:VTF \l__mriseq_el_flip_tl
+          { \fp_set:Nn \l__mriseq_amp_fp { 1 } }
+          {
+            % B1 amplitude is proportional to  flip / (duration * mean shape).
+            % Normalised so that a 180 degree pulse with the default
+            % shape, window, tbw and duration has amplitude 1.
+            \group_begin:
+              \tl_set_eq:NN \l__mriseq_el_shape_tl \l__mriseq_shape_tl
+              \tl_set_eq:NN \l__mriseq_el_window_tl \l__mriseq_window_tl
+              \fp_set:Nn \l__mriseq_tbw_fp { \l__mriseq_tbw_tl }
+              \__mriseq_shape_mean:N \l__mriseq_tmpb_fp
+              \fp_set:Nn \l__mriseq_tmpb_fp { \l__mriseq_tmpb_fp * ( \l__mriseq_rfdur_tl ) }
+              \exp_args:NNNe \group_end:
+              \fp_set:Nn \l__mriseq_tmpb_fp { \fp_eval:n { \l__mriseq_tmpb_fp } }
+            \__mriseq_fp_set:NVV \l__mriseq_tbw_fp \l__mriseq_el_tbw_tl \l__mriseq_tbw_tl
+            \__mriseq_shape_mean:N \l__mriseq_tmpa_fp
+            \fp_set:Nn \l__mriseq_amp_fp
+              { (\l__mriseq_el_flip_tl) / 180 * \l__mriseq_tmpb_fp
+                / ( \l__mriseq_d_fp * \l__mriseq_tmpa_fp ) }
+          }
+      }
+      { \fp_set:Nn \l__mriseq_amp_fp { \l__mriseq_el_amp_tl } }
+    \__mriseq_fp_set:NVV \l__mriseq_tbw_fp \l__mriseq_el_tbw_tl \l__mriseq_tbw_tl
+    \fp_set:Nn \l__mriseq_max_fp { abs(\l__mriseq_amp_fp) }
+  }
+
+\cs_new_protected:cpn { __mriseq_compute_grad: }
+  {
+    \__mriseq_fp_set:NVV \l__mriseq_ru_fp \l__mriseq_el_ru_tl \l__mriseq_ramp_tl
+    \__mriseq_fp_set:NVV \l__mriseq_rd_fp \l__mriseq_el_rd_tl \l__mriseq_ramp_tl
+    % flat top
+    \tl_if_blank:VTF \l__mriseq_el_flat_tl
+      {
+        \bool_lazy_and:nnTF
+          { ! \tl_if_blank_p:V \l__mriseq_el_area_tl }
+          { ! \tl_if_blank_p:V \l__mriseq_el_amp_tl }
+          {
+            \fp_set:Nn \l__mriseq_flat_fp
+              { max( 0 , (\l__mriseq_el_area_tl) / (\l__mriseq_el_amp_tl)
+                  - (\l__mriseq_ru_fp + \l__mriseq_rd_fp) / 2 ) }
+          }
+          {
+            \tl_if_blank:VTF \l__mriseq_el_dur_tl
+              { \fp_set:Nn \l__mriseq_flat_fp { 1 } }
+              {
+                \fp_set:Nn \l__mriseq_flat_fp
+                  { max( 0 , (\l__mriseq_el_dur_tl) - \l__mriseq_ru_fp - \l__mriseq_rd_fp ) }
+              }
+          }
+      }
+      { \fp_set:Nn \l__mriseq_flat_fp { \l__mriseq_el_flat_tl } }
+    % amplitude
+    \tl_if_blank:VTF \l__mriseq_el_amp_tl
+      {
+        \tl_if_blank:VTF \l__mriseq_el_area_tl
+          { \fp_set:Nn \l__mriseq_amp_fp { 1 } }
+          {
+            \fp_set:Nn \l__mriseq_amp_fp
+              { (\l__mriseq_el_area_tl)
+                / ( \l__mriseq_flat_fp + (\l__mriseq_ru_fp + \l__mriseq_rd_fp) / 2 ) }
+          }
+      }
+      { \fp_set:Nn \l__mriseq_amp_fp { \l__mriseq_el_amp_tl } }
+    \fp_set:Nn \l__mriseq_d_fp
+      { \l__mriseq_ru_fp + \l__mriseq_flat_fp + \l__mriseq_rd_fp }
+    \__mriseq_resolve_start:nn { \l__mriseq_d_fp }
+      { \l__mriseq_ru_fp + \l__mriseq_flat_fp / 2 }
+    \fp_set:Nn \l__mriseq_c_fp
+      { \l__mriseq_s_fp + \l__mriseq_ru_fp + \l__mriseq_flat_fp / 2 }
+    \fp_set:Nn \l__mriseq_area_fp
+      { \l__mriseq_amp_fp * ( \l__mriseq_flat_fp + (\l__mriseq_ru_fp + \l__mriseq_rd_fp) / 2 ) }
+    \fp_set:Nn \l__mriseq_max_fp { abs(\l__mriseq_amp_fp) }
+  }
+\cs_new_eq:cc { __mriseq_compute_ptable: } { __mriseq_compute_grad: }
+
+\cs_new_protected:cpn { __mriseq_compute_adc: }
+  {
+    \tl_if_blank:VTF \l__mriseq_el_dur_tl
+      {
+        \bool_lazy_and:nnTF
+          { ! \tl_if_blank_p:V \l__mriseq_el_samples_tl }
+          { ! \tl_if_blank_p:V \l__mriseq_el_dwell_tl }
+          { \fp_set:Nn \l__mriseq_d_fp { (\l__mriseq_el_samples_tl) * (\l__mriseq_el_dwell_tl) } }
+          { \fp_set:Nn \l__mriseq_d_fp { 1 } }
+      }
+      { \fp_set:Nn \l__mriseq_d_fp { \l__mriseq_el_dur_tl } }
+    \__mriseq_resolve_start:nn { \l__mriseq_d_fp } { \l__mriseq_d_fp / 2 }
+    \fp_set:Nn \l__mriseq_c_fp { \l__mriseq_s_fp + \l__mriseq_d_fp / 2 }
+    \fp_set:Nn \l__mriseq_max_fp { 1 }
+    \fp_set:Nn \l__mriseq_amp_fp { 1 }
+  }
+
+\cs_new_protected:cpn { __mriseq_compute_fid: }
+  {
+    \__mriseq_fp_set:NVn \l__mriseq_ttwo_fp \l__mriseq_el_ttwo_tl { 1 }
+    \__mriseq_fp_set:NVn \l__mriseq_d_fp \l__mriseq_el_dur_tl { 4 * \l__mriseq_ttwo_fp }
+    \__mriseq_fp_set:NVn \l__mriseq_amp_fp \l__mriseq_el_amp_tl { 1 }
+    \tl_if_blank:VT \l__mriseq_el_start_tl
+      { \tl_set_eq:NN \l__mriseq_el_start_tl \l__mriseq_el_center_tl }
+    \__mriseq_resolve_start:nn { \l__mriseq_d_fp } { 0 }
+    \fp_set_eq:NN \l__mriseq_c_fp \l__mriseq_s_fp
+    \fp_set:Nn \l__mriseq_max_fp { abs(\l__mriseq_amp_fp) }
+  }
+
+\cs_new_protected:cpn { __mriseq_compute_echo: }
+  {
+    \__mriseq_fp_set:NVn \l__mriseq_ttwo_fp \l__mriseq_el_ttwo_tl { 0.6 }
+    \__mriseq_fp_set:NVn \l__mriseq_d_fp \l__mriseq_el_dur_tl { 8 * \l__mriseq_ttwo_fp }
+    \__mriseq_fp_set:NVn \l__mriseq_amp_fp \l__mriseq_el_amp_tl { 1 }
+    \__mriseq_resolve_start:nn { \l__mriseq_d_fp } { \l__mriseq_d_fp / 2 }
+    \fp_set:Nn \l__mriseq_c_fp { \l__mriseq_s_fp + \l__mriseq_d_fp / 2 }
+    \fp_set:Nn \l__mriseq_max_fp { abs(\l__mriseq_amp_fp) }
+  }
+
+\cs_new_protected:cpn { __mriseq_compute_wave: }
+  {
+    \fp_set:Nn \l__mriseq_s_fp { inf }
+    \fp_set:Nn \l__mriseq_e_fp { -inf }
+    \fp_set:Nn \l__mriseq_max_fp { 0 }
+    \exp_args:NV \clist_map_inline:nn \l__mriseq_el_points_tl
+      { \__mriseq_wave_extent:w ##1 \q_stop }
+    \fp_compare:nNnT \l__mriseq_s_fp = { inf }
+      { \fp_set:Nn \l__mriseq_s_fp { 0 } \fp_set:Nn \l__mriseq_e_fp { 0 } }
+  }
+\cs_new_protected:Npn \__mriseq_wave_extent:w #1 / #2 \q_stop
+  {
+    \fp_set:Nn \l__mriseq_s_fp { min( \l__mriseq_s_fp , #1 ) }
+    \fp_set:Nn \l__mriseq_e_fp { max( \l__mriseq_e_fp , #1 ) }
+    \fp_set:Nn \l__mriseq_max_fp { max( \l__mriseq_max_fp , abs(#2) ) }
+  }
+
+% =========================================================================
+%  7. Collecting items
+% =========================================================================
+\cs_new_protected:Npn \__mriseq_push:nnn #1#2#3
+  { \tl_gput_right:Nn \g__mriseq_items_tl { \__mriseq_item:nnn {#1} {#2} {#3} } }
+\cs_new_protected:Npn \__mriseq_push:nne #1#2#3
+  { \tl_gput_right:Ne \g__mriseq_items_tl { \exp_not:N \__mriseq_item:nnn {#1} {#2} {#3} } }
+
+\cs_new_protected:Npn \__mriseq_group_of:n #1
+  {
+    \tl_if_exist:cTF { l__mriseq_row_#1_group_tl }
+      { \tl_set_eq:Nc \l__mriseq_group_tl { l__mriseq_row_#1_group_tl } }
+      { \tl_set:Nn \l__mriseq_group_tl {#1} }
+    \tl_if_blank:VF \l__mriseq_el_group_tl
+      { \tl_set_eq:NN \l__mriseq_group_tl \l__mriseq_el_group_tl }
+  }
+
+% ---- measure pass -------------------------------------------------------
+\cs_new_protected:Npn \__mriseq_measure_item:nnn #1#2#3
+  {
+    \group_begin:
+      \keys_set:nn { mriseq / el } {#3}
+      \str_case:nnF {#1}
+        {
+          { marker }
+            {
+              \tl_if_blank:VF \l__mriseq_el_label_tl
+                { \bool_gset_true:N \g__mriseq_markerlabel_bool }
+            }
+          { interval }
+            {
+              \str_case:VnF \l__mriseq_el_pos_tl
+                {
+                  { top }
+                    { \int_gset:Nn \g__mriseq_toplevels_int
+                        { \int_max:nn { \g__mriseq_toplevels_int } { \l__mriseq_el_level_tl } } }
+                  { bottom }
+                    { \int_gset:Nn \g__mriseq_botlevels_int
+                        { \int_max:nn { \g__mriseq_botlevels_int } { \l__mriseq_el_level_tl } } }
+                }
+                { }
+            }
+          { gap }
+            {
+              \seq_gput_right:Ne \g__mriseq_gaps_seq
+                { { \fp_eval:n { \l__mriseq_el_from_tl } } { \fp_eval:n { \l__mriseq_el_to_tl } } }
+            }
+          { tikz } { }
+          { shade } { }
+        }
+        {
+          \__mriseq_compute:n {#1}
+          \bool_if:NT \l__mriseq_el_occupy_bool
+            {
+              \bool_gset_true:N \g__mriseq_any_bool
+              \fp_gset:Nn \g__mriseq_tfirst_fp { min( \g__mriseq_tfirst_fp , \l__mriseq_s_fp ) }
+              \fp_gset:Nn \g__mriseq_tlast_fp  { max( \g__mriseq_tlast_fp , \l__mriseq_e_fp ) }
+              \seq_gput_right:Ne \g__mriseq_occ_seq
+                { { \fp_eval:n { \l__mriseq_s_fp } } { \fp_eval:n { \l__mriseq_e_fp } } }
+            }
+          \__mriseq_group_of:n {#2}
+          \prop_get:NVNF \g__mriseq_max_prop \l__mriseq_group_tl \l__mriseq_tmp_tl
+            { \tl_set:Nn \l__mriseq_tmp_tl { 0 } }
+          \prop_gput:NVe \g__mriseq_max_prop \l__mriseq_group_tl
+            { \fp_eval:n { max( \l__mriseq_tmp_tl , \l__mriseq_max_fp ) } }
+          \prop_get:NeNF \g__mriseq_max_prop { @row@ #2 } \l__mriseq_tmp_tl
+            { \tl_set:Nn \l__mriseq_tmp_tl { 0 } }
+          \prop_gput:Nee \g__mriseq_max_prop { @row@ #2 }
+            { \fp_eval:n { max( \l__mriseq_tmp_tl , \l__mriseq_max_fp ) } }
+        }
+    \group_end:
+  }
+\cs_generate_variant:Nn \prop_get:NnNF { NV }
+\cs_generate_variant:Nn \prop_gput:Nnn { NVe , Nee }
+\cs_generate_variant:Nn \prop_get:NnNF { Ne }
+\cs_generate_variant:Nn \str_case:nnF { V }
+
+% =========================================================================
+%  8. Time mapping (with compressed breaks) and coordinates
+% =========================================================================
+\cs_new:Npn \__mriseq_map:n #1
+  { ( (#1) \seq_map_tokens:Nn \l__mriseq_breaks_seq { \__mriseq_map_aux:nn {#1} } ) }
+\cs_new:Npn \__mriseq_map_aux:nn #1#2 { \__mriseq_map_aux:nnn {#1} #2 }
+\cs_new:Npn \__mriseq_map_aux:nnn #1#2#3
+  { - ( min( max( (#1) , #2 ) , #3 ) - #2 ) * ( 1 - \l__mriseq_g_fp / ( #3 - #2 ) ) }
+\cs_new:Npn \__mriseq_xe:n #1
+  {
+    \bool_if:NTF \l__mriseq_lin_bool
+      { (#1) * \l__mriseq_k_fp + \l__mriseq_xoff_fp }
+      { ( \__mriseq_map:n {#1} - \l__mriseq_mzero_fp ) * \l__mriseq_k_fp }
+  }
+\bool_new:N \l__mriseq_lin_bool
+\fp_new:N \l__mriseq_xoff_fp
+%  Use a linear time mapping for the current element if it does not touch a break
+\cs_new_protected:Npn \__mriseq_try_linear:
+  {
+    \bool_set_false:N \l__mriseq_lin_bool
+    \bool_set_true:N \l_tmpb_bool
+    \seq_map_inline:Nn \l__mriseq_breaks_seq
+      {
+        \fp_compare:nT
+          { \use_i:nn ##1 < \l__mriseq_e_fp + 0.01 && \use_ii:nn ##1 > \l__mriseq_s_fp - 0.01 }
+          { \bool_set_false:N \l_tmpb_bool \seq_map_break: }
+      }
+    \bool_if:NT \l_tmpb_bool
+      {
+        \fp_set:Nn \l__mriseq_xoff_fp
+          { \__mriseq_xe:n { \l__mriseq_s_fp } - \l__mriseq_s_fp * \l__mriseq_k_fp }
+        \bool_set_true:N \l__mriseq_lin_bool
+      }
+  }
+\cs_new:Npn \__mriseq_x:n #1
+  { \fp_eval:n { round( \__mriseq_xe:n {#1} , 4 ) } }
+\cs_new:Npn \__mriseq_y:n #1
+  { \fp_eval:n { round( \l__mriseq_cur_yb_tl + (#1) * \l__mriseq_cur_sc_tl , 4 ) } }
+\cs_new:Npn \__mriseq_pt:nn #1#2
+  { ( \__mriseq_x:n {#1} cm , \__mriseq_y:n {#2} cm ) }
+
+\cs_new_protected:Npn \__mriseq_use_row:n #1
+  {
+    \tl_set_eq:Nc \l__mriseq_cur_yb_tl { l__mriseq_row_#1_yb_tl }
+    \tl_set_eq:Nc \l__mriseq_cur_sc_tl { l__mriseq_row_#1_sc_tl }
+    \tl_set_eq:Nc \l__mriseq_cur_ybot_tl { l__mriseq_row_#1_ybot_tl }
+    \tl_set:Ne \l__mriseq_cur_h_tl
+      { \fp_eval:n { \tl_use:c { l__mriseq_row_#1_ytop_tl } - \tl_use:c { l__mriseq_row_#1_ybot_tl } } }
+  }
+
+% ---- auto breaks --------------------------------------------------------
+\cs_new_protected:Npn \__mriseq_compute_breaks:
+  {
+    \seq_clear:N \l__mriseq_breaks_seq
+    \seq_map_inline:Nn \g__mriseq_gaps_seq
+      { \seq_put_right:Nn \l__mriseq_breaks_seq {##1} }
+    \bool_if:NT \l__mriseq_compress_bool
+      {
+        \seq_set_eq:NN \l__mriseq_tmp_seq \g__mriseq_occ_seq
+        \seq_sort:Nn \l__mriseq_tmp_seq
+          {
+            \fp_compare:nNnTF { \use_i:nn ##1 } > { \use_i:nn ##2 }
+              { \sort_return_swapped: } { \sort_return_same: }
+          }
+        \fp_set:Nn \l__mriseq_tmpa_fp { -inf }   % end of merged block so far
+        \seq_map_inline:Nn \l__mriseq_tmp_seq
+          {
+            \fp_set:Nn \l__mriseq_tmpb_fp { \use_i:nn ##1 }
+            \bool_lazy_and:nnT
+              { \fp_compare_p:nNn \l__mriseq_tmpa_fp > { -inf } }
+              { \fp_compare_p:nNn { \l__mriseq_tmpb_fp - \l__mriseq_tmpa_fp } > \l__mriseq_threshold_fp }
+              {
+                \seq_put_right:Ne \l__mriseq_breaks_seq
+                  {
+                    { \fp_eval:n { \l__mriseq_tmpa_fp + \l__mriseq_margin_fp } }
+                    { \fp_eval:n { \l__mriseq_tmpb_fp - \l__mriseq_margin_fp } }
+                  }
+              }
+            \fp_set:Nn \l__mriseq_tmpa_fp { max( \l__mriseq_tmpa_fp , \use_ii:nn ##1 ) }
+          }
+      }
+    % sort and merge overlapping breaks
+    \seq_sort:Nn \l__mriseq_breaks_seq
+      {
+        \fp_compare:nNnTF { \use_i:nn ##1 } > { \use_i:nn ##2 }
+          { \sort_return_swapped: } { \sort_return_same: }
+      }
+    \seq_clear:N \l__mriseq_tmp_seq
+    \fp_set:Nn \l__mriseq_tmpa_fp { nan }
+    \seq_map_inline:Nn \l__mriseq_breaks_seq
+      {
+        \fp_if_nan:nTF { \l__mriseq_tmpa_fp }
+          {
+            \fp_set:Nn \l__mriseq_tmpa_fp { \use_i:nn ##1 }
+            \fp_set:Nn \l__mriseq_tmpb_fp { \use_ii:nn ##1 }
+          }
+          {
+            \fp_compare:nNnTF { \use_i:nn ##1 } > \l__mriseq_tmpb_fp
+              {
+                \seq_put_right:Ne \l__mriseq_tmp_seq
+                  { { \fp_eval:n { \l__mriseq_tmpa_fp } } { \fp_eval:n { \l__mriseq_tmpb_fp } } }
+                \fp_set:Nn \l__mriseq_tmpa_fp { \use_i:nn ##1 }
+                \fp_set:Nn \l__mriseq_tmpb_fp { \use_ii:nn ##1 }
+              }
+              { \fp_set:Nn \l__mriseq_tmpb_fp { max( \l__mriseq_tmpb_fp , \use_ii:nn ##1 ) } }
+          }
+      }
+    \fp_if_nan:nF { \l__mriseq_tmpa_fp }
+      {
+        \seq_put_right:Ne \l__mriseq_tmp_seq
+          { { \fp_eval:n { \l__mriseq_tmpa_fp } } { \fp_eval:n { \l__mriseq_tmpb_fp } } }
+      }
+    \seq_set_eq:NN \l__mriseq_breaks_seq \l__mriseq_tmp_seq
+    % keep only breaks inside the time window, clipped to it
+    \seq_clear:N \l__mriseq_tmp_seq
+    \seq_map_inline:Nn \l__mriseq_breaks_seq
+      {
+        \fp_set:Nn \l__mriseq_tmpa_fp { max( \use_i:nn ##1 , \l__mriseq_tmin_fp ) }
+        \fp_set:Nn \l__mriseq_tmpb_fp { min( \use_ii:nn ##1 , \l__mriseq_tmax_fp ) }
+        \fp_compare:nNnT { \l__mriseq_tmpb_fp - \l__mriseq_tmpa_fp } > { 0 }
+          {
+            \seq_put_right:Ne \l__mriseq_tmp_seq
+              { { \fp_eval:n { \l__mriseq_tmpa_fp } } { \fp_eval:n { \l__mriseq_tmpb_fp } } }
+          }
+      }
+    \seq_set_eq:NN \l__mriseq_breaks_seq \l__mriseq_tmp_seq
+  }
+
+% =========================================================================
+%  9. Layout
+% =========================================================================
+\cs_new_protected:Npn \__mriseq_layout:
+  {
+    % ---- time window
+    \bool_if:NTF \g__mriseq_any_bool
+      {
+        \__mriseq_fp_set:NVn \l__mriseq_tmin_fp \l__mriseq_tmin_tl
+          { \g__mriseq_tfirst_fp - \l__mriseq_pad_fp }
+        \__mriseq_fp_set:NVn \l__mriseq_tmax_fp \l__mriseq_tmax_tl
+          { \g__mriseq_tlast_fp + \l__mriseq_pad_fp }
+      }
+      {
+        \__mriseq_fp_set:NVn \l__mriseq_tmin_fp \l__mriseq_tmin_tl { 0 }
+        \__mriseq_fp_set:NVn \l__mriseq_tmax_fp \l__mriseq_tmax_tl { 10 }
+      }
+    \__mriseq_compute_breaks:
+    % ---- horizontal scale
+    \fp_set:Nn \l__mriseq_tmpa_fp { \l__mriseq_tmax_fp - \l__mriseq_tmin_fp }
+    \seq_map_inline:Nn \l__mriseq_breaks_seq
+      { \fp_sub:Nn \l__mriseq_tmpa_fp { \use_ii:nn ##1 - \use_i:nn ##1 } }
+    \fp_set:Nn \l__mriseq_tmpb_fp
+      { \seq_count:N \l__mriseq_breaks_seq * \dim_to_decimal_in_unit:nn { \l__mriseq_breakwidth_dim } { 1cm } }
+    \tl_if_blank:VTF \l__mriseq_xscale_tl
+      {
+        \fp_set:Nn \l__mriseq_width_fp
+          {
+            \dim_to_decimal_in_unit:nn
+              { \l__mriseq_width_tl - \bool_if:NTF \l__mriseq_rowlabels_bool
+                  { \l__mriseq_labelwidth_dim } { 0pt }
+                - \bool_lazy_or:nnTF
+                    { \str_if_eq_p:Vn \l__mriseq_kspace_tl { none } }
+                    { \str_if_eq_p:Vn \l__mriseq_kspace_tl { below } }
+                    { 0pt }
+                    { ( \l__mriseq_kspace_size_dim + \l__mriseq_kspace_gap_dim ) } } { 1cm }
+          }
+        \fp_set:Nn \l__mriseq_k_fp
+          { (\l__mriseq_width_fp - \l__mriseq_tmpb_fp) / \l__mriseq_tmpa_fp }
+      }
+      {
+        \fp_set:Nn \l__mriseq_k_fp
+          { \dim_to_decimal_in_unit:nn { \l__mriseq_xscale_tl } { 1cm } }
+        \fp_set:Nn \l__mriseq_width_fp
+          { \l__mriseq_k_fp * \l__mriseq_tmpa_fp + \l__mriseq_tmpb_fp }
+      }
+    \fp_set:Nn \l__mriseq_g_fp
+      { \dim_to_decimal_in_unit:nn { \l__mriseq_breakwidth_dim } { 1cm } / \l__mriseq_k_fp }
+    \fp_set:Nn \l__mriseq_mzero_fp { 0 }
+    \fp_set:Nn \l__mriseq_mzero_fp { \__mriseq_map:n { \l__mriseq_tmin_fp } }
+    % ---- rows
+    \seq_clear:N \l__mriseq_vrows_seq
+    \fp_set:Nn \l__mriseq_tmpa_fp { 0 }
+    \clist_map_inline:Nn \l__mriseq_rows_clist
+      {
+        \tl_if_exist:cTF { l__mriseq_row_##1_label_tl }
+          {
+            \seq_put_right:Nn \l__mriseq_vrows_seq {##1}
+            \fp_set:Nn \l__mriseq_tmpb_fp
+              { \l__mriseq_rowscale_fp *
+                \dim_to_decimal_in_unit:nn { \tl_use:c { l__mriseq_row_##1_height_tl } } { 1cm } }
+            \tl_set:ce { l__mriseq_row_##1_ytop_tl } { \fp_eval:n { \l__mriseq_tmpa_fp } }
+            \fp_sub:Nn \l__mriseq_tmpa_fp { \l__mriseq_tmpb_fp }
+            \tl_set:ce { l__mriseq_row_##1_ybot_tl } { \fp_eval:n { \l__mriseq_tmpa_fp } }
+            \tl_set:ce { l__mriseq_row_##1_yb_tl }
+              { \fp_eval:n { \l__mriseq_tmpa_fp + \tl_use:c { l__mriseq_row_##1_base_tl } * \l__mriseq_tmpb_fp } }
+            % amplitude scale
+            \tl_set_eq:Nc \l__mriseq_group_tl { l__mriseq_row_##1_group_tl }
+            \bool_lazy_and:nnT { \l__mriseq_gradrow_bool }
+              { \str_if_eq_p:Vn \l__mriseq_group_tl { grad } }
+              { \tl_set:Nn \l__mriseq_group_tl { @row@ ##1 } }
+            \__mriseq_group_max:V \l__mriseq_group_tl
+            % fraction of the half row used by the largest amplitude
+            \str_if_eq:VnTF \l__mriseq_ampfill_tl { auto }
+              {
+                \fp_set:Nn \l__mriseq_ampfill_fp
+                  {
+                    \bool_lazy_and:nnTF
+                      { \bool_lazy_or_p:nn { \l__mriseq_amplabels_bool } { \l__mriseq_arealabels_bool } }
+                      { ! \str_if_eq_p:ee { \tl_use:c { l__mriseq_row_##1_group_tl } } { rf } }
+                      { 0.6 } { 0.85 }
+                  }
+              }
+              { \fp_set:Nn \l__mriseq_ampfill_fp { \l__mriseq_ampfill_tl } }
+            \tl_set:ce { l__mriseq_row_##1_sc_tl }
+              {
+                \fp_eval:n
+                  { (1 - \tl_use:c { l__mriseq_row_##1_base_tl }) * \l__mriseq_tmpb_fp
+                    * \l__mriseq_ampfill_fp / \l__mriseq_tmpc_fp }
+              }
+          }
+          { \msg_warning:nnn { mriseq } { unknown-row } {##1} }
+      }
+    \fp_set_eq:NN \l__mriseq_ybot_fp \l__mriseq_tmpa_fp
+    \fp_set:Nn \l__mriseq_xlab_fp
+      { - \bool_if:NTF \l__mriseq_rowlabels_bool
+          { \dim_to_decimal_in_unit:nn { \l__mriseq_labelwidth_dim } { 1cm } } { 0 } }
+    \fp_set:Nn \l__mriseq_header_fp
+      {
+        \bool_if:NTF \g__mriseq_markerlabel_bool
+          { \dim_to_decimal_in_unit:nn { \l__mriseq_markerspace_dim } { 1cm } } { 0.08 }
+        + \g__mriseq_toplevels_int * \dim_to_decimal_in_unit:nn { \l__mriseq_intervalsep_dim } { 1cm }
+      }
+    \fp_set:Nn \l__mriseq_yaxis_fp { \l__mriseq_ybot_fp - 0.12 }
+  }
+%  maximum of a group -> \l__mriseq_tmpc_fp
+\cs_new_protected:Npn \__mriseq_group_max:n #1
+  {
+    \tl_clear:N \l__mriseq_tmp_tl
+    \str_case:nnF {#1}
+      {
+        { grad } { \tl_set_eq:NN \l__mriseq_tmp_tl \l__mriseq_max_grad_tl }
+        { rf }   { \tl_set_eq:NN \l__mriseq_tmp_tl \l__mriseq_max_rf_tl }
+        { sig }  { \tl_set_eq:NN \l__mriseq_tmp_tl \l__mriseq_max_sig_tl }
+        { adc }  { \tl_set:Nn \l__mriseq_tmp_tl { 1 } }
+        { mz }   { \tl_set:Nn \l__mriseq_tmp_tl { 1 } }
+      }
+      { }
+    \tl_if_blank:VT \l__mriseq_tmp_tl
+      {
+        \prop_get:NnNF \g__mriseq_max_prop {#1} \l__mriseq_tmp_tl
+          { \tl_set:Nn \l__mriseq_tmp_tl { 1 } }
+      }
+    \fp_set:Nn \l__mriseq_tmpc_fp { \l__mriseq_tmp_tl }
+    \fp_compare:nNnT \l__mriseq_tmpc_fp = { 0 } { \fp_set:Nn \l__mriseq_tmpc_fp { 1 } }
+  }
+\cs_generate_variant:Nn \__mriseq_group_max:n { V }
+
+% =========================================================================
+% 10. Drawing
+% =========================================================================
+\cs_new_protected:Npn \__mriseq_exec:e #1
+  { \tl_set:Ne \l__mriseq_cmd_tl {#1} \tl_use:N \l__mriseq_cmd_tl }
+
+\cs_new_protected:Npn \__mriseq_draw_item:nnn #1#2#3
+  {
+    \int_gincr:N \g__mriseq_idx_int
+    \str_case:nnF {#1}
+      {
+        { marker } { }
+        { interval } { }
+        { gap } { }
+        { tikz } { }
+        { shade } { }
+      }
+      {
+        \seq_if_in:NnT \l__mriseq_vrows_seq {#2}
+          {
+            \group_begin:
+              \keys_set:nn { mriseq / el } {#3}
+              \__mriseq_compute:n {#1}
+              \__mriseq_try_linear:
+              \__mriseq_use_row:n {#2}
+              \tl_set:Nn \l__mriseq_row_tl {#2}
+              \__mriseq_group_of:n {#2}
+              \use:c { __mriseq_draw_#1: }
+            \group_end:
+          }
+      }
+  }
+\tl_new:N \l__mriseq_mode_tl
+\cs_new_protected:Npn \__mriseq_draw_markers:nnn #1#2#3
+  {
+    \str_case:nn {#1}
+      {
+        { marker }
+          { \group_begin: \keys_set:nn { mriseq / el } {#3} \__mriseq_draw_marker: \group_end: }
+        { interval }
+          {
+            \str_if_eq:VnT \l__mriseq_mode_tl { lines }
+              { \group_begin: \keys_set:nn { mriseq / el } {#3} \__mriseq_draw_interval: \group_end: }
+          }
+      }
+  }
+\cs_new_protected:Npn \__mriseq_draw_annot:nnn #1#2#3
+  {
+    \str_case:nnF {#1}
+      {
+        { interval } { \group_begin: \tl_set:Nn \l__mriseq_mode_tl { annot } \keys_set:nn { mriseq / el } {#3} \__mriseq_draw_interval: \group_end: }
+        { tikz } { \group_begin: \keys_set:nn { mriseq / el } {#3} \tl_use:N \l__mriseq_el_code_tl \group_end: }
+        { shade } { \group_begin: \keys_set:nn { mriseq / el } {#3} \__mriseq_draw_shade:n {#2} \group_end: }
+      }
+      { }
+  }
+
+%  Line colour and fill colour of the current element
+%  #1 = default line colour, #2 = fill mix tl, #3 = fixed fill tl
+\cs_new_protected:Npn \__mriseq_colors:nNN #1#2#3
+  {
+    \tl_if_blank:VTF \l__mriseq_el_color_tl
+      { \tl_set:Nn \l__mriseq_col_tl {#1} }
+      { \tl_set_eq:NN \l__mriseq_col_tl \l__mriseq_el_color_tl }
+    \tl_if_blank:VTF \l__mriseq_el_fill_tl
+      {
+        \tl_if_blank:VTF #3
+          { \tl_set:Ne \l__mriseq_fill_tl { \l__mriseq_col_tl ! #2 ! white } }
+          { \tl_set_eq:NN \l__mriseq_fill_tl #3 }
+      }
+      { \tl_set_eq:NN \l__mriseq_fill_tl \l__mriseq_el_fill_tl }
+  }
+
+% ---- RF pulse -----------------------------------------------------------
+\cs_new:Npn \__mriseq_window:n #1
+  { \cs_if_exist_use:cF { __mriseq_window_ \l__mriseq_el_window_tl :n } { 1 \use_none:n } {#1} }
+\cs_new:Npn \__mriseq_window_hamming:n #1 { ( 0.54 + 0.46 * cos( 2 * pi * (#1) ) ) }
+\cs_new:Npn \__mriseq_window_hann:n #1 { ( 0.5 + 0.5 * cos( 2 * pi * (#1) ) ) }
+\cs_new:Npn \__mriseq_window_hanning:n #1 { ( 0.5 + 0.5 * cos( 2 * pi * (#1) ) ) }
+\cs_new:Npn \__mriseq_window_none:n #1 { 1 }
+\cs_new:Npn \__mriseq_shape_sinc:n #1
+  {
+    ( sin( pi * \l__mriseq_tbw_fp * (#1) + 1e-12 ) / ( pi * \l__mriseq_tbw_fp * (#1) + 1e-12 ) )
+    * \__mriseq_window:n {#1}
+  }
+\cs_new:Npn \__mriseq_shape_gauss:n #1 { exp( -0.5 * ( (#1) / 0.17 ) ^ 2 ) }
+\cs_new:Npn \__mriseq_shape_sech:n #1
+  { 2 / ( exp( 10 * (#1) ) + exp( -10 * (#1) ) ) }
+\cs_new:Npn \__mriseq_shape_hard:n #1 { 1 }
+
+\cs_new_protected:cpn { __mriseq_draw_rf: }
+  {
+    % role -> colour
+    \tl_if_blank:VT \l__mriseq_el_role_tl
+      {
+        \bool_lazy_and:nnTF
+          { ! \tl_if_blank_p:V \l__mriseq_el_flip_tl }
+          { \fp_compare_p:nNn { \l__mriseq_el_flip_tl } > { 135 } }
+          { \tl_set:Nn \l__mriseq_el_role_tl { refocus } }
+          { \tl_set:Nn \l__mriseq_el_role_tl { excite } }
+      }
+    \__mriseq_colors:nNN { mriseq-rf- \l__mriseq_el_role_tl } \l__mriseq_rfmix_tl \l__mriseq_rffill_tl
+    \tl_clear:N \l__mriseq_path_tl
+    \str_if_eq:VnTF \l__mriseq_el_shape_tl { hard }
+      {
+        \tl_set:Ne \l__mriseq_path_tl
+          {
+            -- \__mriseq_pt:nn { \l__mriseq_s_fp } { \l__mriseq_amp_fp }
+            -- \__mriseq_pt:nn { \l__mriseq_e_fp } { \l__mriseq_amp_fp }
+          }
+      }
+      {
+        % a smooth curve through the samples (resolution = number of intervals)
+        \int_set:Nn \l__mriseq_n_int { \l__mriseq_el_res_tl }
+        \int_step_inline:nnn { 0 } { \l__mriseq_n_int }
+          {
+            \fp_set:Nn \l__mriseq_tmpa_fp { -0.5 + ##1 / \l__mriseq_n_int }
+            \tl_put_right:Ne \l__mriseq_path_tl
+              {
+                \__mriseq_pt:nn
+                  { \l__mriseq_c_fp + \l__mriseq_tmpa_fp * \l__mriseq_d_fp }
+                  { \l__mriseq_amp_fp * \use:c { __mriseq_shape_ \l__mriseq_el_shape_tl :n } { \l__mriseq_tmpa_fp } }
+              }
+          }
+        \tl_set:Ne \l__mriseq_path_tl
+          { -- plot [ smooth , tension = 0.5 ] coordinates { \exp_not:V \l__mriseq_path_tl } }
+      }
+    \__mriseq_exec:e
+      {
+        \exp_not:N \path [ mriseq/rf~fill , fill = \l__mriseq_fill_tl ]
+          \__mriseq_pt:nn { \l__mriseq_s_fp } { 0 }
+          \exp_not:V \l__mriseq_path_tl
+          -- \__mriseq_pt:nn { \l__mriseq_e_fp } { 0 } -- cycle ;
+        \exp_not:N \draw [ mriseq/rf , draw = \l__mriseq_col_tl , \exp_not:V \l__mriseq_el_style_tl ]
+          \__mriseq_pt:nn { \l__mriseq_s_fp } { 0 }
+          \exp_not:V \l__mriseq_path_tl
+          -- \__mriseq_pt:nn { \l__mriseq_e_fp } { 0 } ;
+      }
+    % label
+    \tl_if_blank:VTF \l__mriseq_el_label_tl
+      {
+        \bool_lazy_and:nnT
+          { \l__mriseq_fliplabels_bool }
+          { ! \tl_if_blank_p:V \l__mriseq_el_flip_tl }
+          {
+            \tl_set:Ne \l__mriseq_el_label_tl
+              {
+                $ \exp_not:V \l__mriseq_el_flip_tl ^ { \exp_not:N \circ }
+                \tl_if_blank:VF \l__mriseq_el_phase_tl
+                  { \c_math_subscript_token { \exp_not:V \l__mriseq_el_phase_tl } } $
+              }
+          }
+      }
+      { }
+    \tl_if_blank:VF \l__mriseq_el_label_tl
+      {
+        \__mriseq_exec:e
+          {
+            \exp_not:N \node [ mriseq/flip~label , anchor = south ]
+              at \__mriseq_pt:nn { \l__mriseq_c_fp } { \fp_eval:n { max( \l__mriseq_amp_fp , 0 ) } }
+              { \exp_not:V \l__mriseq_el_label_tl } ;
+          }
+      }
+  }
+
+% ---- trapezoid gradient -------------------------------------------------
+%  area of the trapezoid between its start and time #1
+\cs_new:Npn \__mriseq_trap_area:n #1
+  {
+    \l__mriseq_amp_fp *
+    (
+      ( (#1) <= \l__mriseq_s_fp ) ? 0 :
+      ( (#1) <= \l__mriseq_s_fp + \l__mriseq_ru_fp ) ?
+          ( (#1) - \l__mriseq_s_fp ) ^ 2 / ( 2 * max( \l__mriseq_ru_fp , 1e-9 ) ) :
+      ( (#1) <= \l__mriseq_s_fp + \l__mriseq_ru_fp + \l__mriseq_flat_fp ) ?
+          ( \l__mriseq_ru_fp / 2 + (#1) - \l__mriseq_s_fp - \l__mriseq_ru_fp ) :
+      ( (#1) < \l__mriseq_e_fp ) ?
+          ( \l__mriseq_ru_fp / 2 + \l__mriseq_flat_fp + \l__mriseq_rd_fp / 2
+            - ( \l__mriseq_e_fp - (#1) ) ^ 2 / ( 2 * max( \l__mriseq_rd_fp , 1e-9 ) ) ) :
+      ( \l__mriseq_ru_fp / 2 + \l__mriseq_flat_fp + \l__mriseq_rd_fp / 2 )
+    )
+  }
+
+\cs_new_protected:Npn \__mriseq_trap_path:n #1
+  {
+    \tl_set:Ne \l__mriseq_path_tl
+      {
+        \__mriseq_pt:nn { \l__mriseq_s_fp } { 0 }
+        -- \__mriseq_pt:nn { \l__mriseq_s_fp + \l__mriseq_ru_fp } { #1 }
+        -- \__mriseq_pt:nn { \l__mriseq_s_fp + \l__mriseq_ru_fp + \l__mriseq_flat_fp } { #1 }
+        -- \__mriseq_pt:nn { \l__mriseq_e_fp } { 0 }
+      }
+  }
+
+%  Value labels.  "outside" labels sit on the background and get a backing in
+%  the background colour, so that lines behind them are cleanly interrupted;
+%  "inside" labels sit completely inside a filled shape.
+\cs_new_protected:Npn \__mriseq_value_node:nnnn #1#2#3#4
+  { \__mriseq_value_node:nnnnn {#1} {#2} {#3} {#4} { mriseq/value~outside } }
+\cs_new_protected:Npn \__mriseq_value_node:nnnnn #1#2#3#4#5
+  % #1 time, #2 amplitude, #3 anchor, #4 text, #5 style
+  {
+    \bool_if:NTF \l__mriseq_avoid_bool
+      {
+        \group_begin:
+          \__mriseq_measure:n {#4}
+          \fp_set:Nn \l__mriseq_tmpa_fp { \__mriseq_x:n {#1} }
+          \fp_set:Nn \l__mriseq_tmpb_fp { \__mriseq_y:n {#2} }
+          \__mriseq_label_box:n {#3}
+          % keep the label inside the time window: shift it horizontally
+          \fp_set:Nn \l__mriseq_tmpc_fp
+            {
+              max( 0 , - \tl_item:Nn \l__mriseq_box_tl { 1 } )
+              - max( 0 , \tl_item:Nn \l__mriseq_box_tl { 3 } - \l__mriseq_width_fp )
+            }
+          \fp_compare:nNnF \l__mriseq_tmpc_fp = { 0 }
+            {
+              \fp_add:Nn \l__mriseq_tmpa_fp { \l__mriseq_tmpc_fp }
+              \__mriseq_label_box:n {#3}
+            }
+          \__mriseq_box_free:TF
+            {
+              \seq_gput_right:Ne \g__mriseq_labbox_seq { \l__mriseq_box_tl }
+              \__mriseq_exec:e
+                {
+                  \exp_not:N \node [ mriseq/value , #5 , anchor = #3 ,
+                                     xshift = \fp_eval:n { \l__mriseq_tmpc_fp } cm ]
+                    at \__mriseq_pt:nn {#1} {#2} {#4} ;
+                }
+            }
+            { \msg_info:nnee { mriseq } { label-dropped } { \tl_to_str:V \l__mriseq_lab_tl } { \l__mriseq_box_tl ~ idx~\int_use:N \g__mriseq_idx_int } }
+        \group_end:
+      }
+      {
+        \__mriseq_exec:e
+          {
+            \exp_not:N \node [ mriseq/value , #5 , anchor = #3 ]
+              at \__mriseq_pt:nn {#1} {#2} {#4} ;
+          }
+      }
+  }
+%  ---- collision avoidance for value labels ---------------------------------
+\seq_new:N \g__mriseq_labbox_seq
+\seq_new:N \g__mriseq_obst_seq
+\int_new:N \g__mriseq_idx_int
+\tl_new:N \l__mriseq_box_tl
+\msg_new:nnn { mriseq } { label-dropped }
+  { Label~`#1'~left~out~because~it~would~overlap~another~label~or~waveform~(box~#2). }
+\cs_generate_variant:Nn \msg_info:nnnn { nnee }
+%  box of the measured label at (\l__mriseq_tmpa_fp, \l__mriseq_tmpb_fp) with anchor #1
+\cs_new_protected:Npn \__mriseq_label_box:n #1
+  {
+    \tl_set:Ne \l__mriseq_type_tl {#1}
+    \tl_trim_spaces:N \l__mriseq_type_tl
+    \str_case:VnF \l__mriseq_type_tl
+      {
+        { north }      { \tl_set:Nn \l__mriseq_type_tl { { -0.5 } { -1 } } }
+        { south }      { \tl_set:Nn \l__mriseq_type_tl { { -0.5 } { 0 } } }
+        { south~west } { \tl_set:Nn \l__mriseq_type_tl { { 0 } { 0 } } }
+        { center }     { \tl_set:Nn \l__mriseq_type_tl { { -0.5 } { -0.5 } } }
+      }
+      { \tl_set:Nn \l__mriseq_type_tl { { -0.5 } { -0.5 } } }
+    \tl_set:Ne \l__mriseq_box_tl
+      {
+        { \fp_eval:n { \l__mriseq_tmpa_fp + \tl_item:Nn \l__mriseq_type_tl { 1 } * \l__mriseq_labw_fp - 0.03 } }
+        { \fp_eval:n { \l__mriseq_tmpb_fp + \tl_item:Nn \l__mriseq_type_tl { 2 } * \l__mriseq_labh_fp - 0.015 } }
+        { \fp_eval:n { \l__mriseq_tmpa_fp + ( \tl_item:Nn \l__mriseq_type_tl { 1 } + 1 ) * \l__mriseq_labw_fp + 0.03 } }
+        { \fp_eval:n { \l__mriseq_tmpb_fp + ( \tl_item:Nn \l__mriseq_type_tl { 2 } + 1 ) * \l__mriseq_labh_fp + 0.015 } }
+      }
+  }
+\prg_new_protected_conditional:Npnn \__mriseq_box_free: { TF }
+  {
+    % inside the time window horizontally
+    \bool_set:Nn \l_tmpb_bool
+      {
+        \fp_compare_p:nNn { \tl_item:Nn \l__mriseq_box_tl { 1 } } > { -0.01 }
+        && \fp_compare_p:nNn { \tl_item:Nn \l__mriseq_box_tl { 3 } } < { \l__mriseq_width_fp + 0.01 }
+      }
+    \bool_if:NT \l_tmpb_bool
+      {
+        \seq_map_inline:Nn \g__mriseq_labbox_seq
+          {
+            \__mriseq_box_overlap:nnnnnnnnT ##1 \l__mriseq_box_tl
+              { \bool_set_false:N \l_tmpb_bool \seq_map_break: }
+          }
+      }
+    \bool_if:NT \l_tmpb_bool
+      {
+        \seq_map_inline:Nn \g__mriseq_obst_seq
+          {
+            \int_compare:nNnF { \use_i:nnnnn ##1 } = \g__mriseq_idx_int
+              {
+                \exp_after:wN \__mriseq_box_overlap:nnnnnnnnT \use_none:n ##1 \l__mriseq_box_tl
+                  { \bool_set_false:N \l_tmpb_bool \seq_map_break: }
+              }
+          }
+      }
+    \bool_if:NTF \l_tmpb_bool { \prg_return_true: } { \prg_return_false: }
+  }
+\cs_new_protected:Npn \__mriseq_box_overlap:nnnnnnnnT #1#2#3#4#5
+  { \exp_args:No \__mriseq_box_overlap_aux:nnnnnnnnT {#5} {#1} {#2} {#3} {#4} }
+\cs_new_protected:Npn \__mriseq_box_overlap_aux:nnnnnnnnT #1#2#3#4#5#6
+  { \__mriseq_box_overlap_ii:nnnnnnnnn {#2} {#3} {#4} {#5} #1 {#6} }
+\cs_new_protected:Npn \__mriseq_box_overlap_ii:nnnnnnnnn #1#2#3#4#5#6#7#8#9
+  {
+    \bool_lazy_all:nT
+      {
+        { \fp_compare_p:nNn {#1} < {#7} } { \fp_compare_p:nNn {#5} < {#3} }
+        { \fp_compare_p:nNn {#2} < {#8} } { \fp_compare_p:nNn {#6} < {#4} }
+      }
+      {#9}
+  }
+%  obstacle pass: boxes of all waveforms on visible rows
+\cs_new_protected:Npn \__mriseq_obst_item:nnn #1#2#3
+  {
+    \int_gincr:N \g__mriseq_idx_int
+    \seq_if_in:NnT \l__mriseq_vrows_seq {#2}
+      {
+        \str_case:nn {#1}
+          {
+            { grad } { \__mriseq_obst_box:nnnn {#1} {#2} {#3} { 0 } }
+            { ptable } { \__mriseq_obst_box:nnnn {#1} {#2} {#3} { 1 } }
+            { rf } { \__mriseq_obst_box:nnnn {#1} {#2} {#3} { 0 } }
+            { adc } { \__mriseq_obst_box:nnnn {#1} {#2} {#3} { 1 } }
+          }
+      }
+  }
+\cs_new_protected:Npn \__mriseq_obst_box:nnnn #1#2#3#4
+  % #4 = 1: symmetric about the zero line
+  {
+    \group_begin:
+      \keys_set:nn { mriseq / el } {#3}
+      \__mriseq_compute:n {#1}
+      \__mriseq_use_row:n {#2}
+      \fp_set:Nn \l__mriseq_tmpa_fp { \__mriseq_y:n { \l__mriseq_amp_fp } }
+      \fp_set:Nn \l__mriseq_tmpb_fp
+        { \__mriseq_y:n { \int_compare:nNnTF {#4} = { 1 } { - \l__mriseq_amp_fp } { 0 } } }
+      \seq_gput_right:Ne \g__mriseq_obst_seq
+        {
+          { \int_use:N \g__mriseq_idx_int }
+          { \fp_eval:n { \__mriseq_xe:n { \l__mriseq_s_fp } + 0.03 } }
+          { \fp_eval:n { min( \l__mriseq_tmpa_fp , \l__mriseq_tmpb_fp ) + 0.035 } }
+          { \fp_eval:n { \__mriseq_xe:n { \l__mriseq_e_fp } - 0.03 } }
+          { \fp_eval:n { max( \l__mriseq_tmpa_fp , \l__mriseq_tmpb_fp ) - 0.035 } }
+        }
+    \group_end:
+  }
+%  Measure a label (text is e-expanded): size in cm incl. inner sep
+\box_new:N \l__mriseq_lab_box
+\tl_new:N \l__mriseq_lab_tl
+\fp_new:N \l__mriseq_labw_fp
+\fp_new:N \l__mriseq_labh_fp
+\cs_new_protected:Npn \__mriseq_measure:n #1
+  {
+    \tl_set:Ne \l__mriseq_lab_tl {#1}
+    \hbox_set:Nn \l__mriseq_lab_box
+      { \pgfinterruptpicture \normalfont \mriseq@valuefont \tl_use:N \l__mriseq_lab_tl \endpgfinterruptpicture }
+    \fp_set:Nn \l__mriseq_labw_fp
+      { \dim_to_decimal_in_unit:nn { \box_wd:N \l__mriseq_lab_box + 2.4pt } { 1cm } }
+    \fp_set:Nn \l__mriseq_labh_fp
+      {
+        \dim_to_decimal_in_unit:nn
+          { \box_ht:N \l__mriseq_lab_box + \box_dp:N \l__mriseq_lab_box + 2.4pt } { 1cm }
+      }
+  }
+%  does the measured label fit into  width #1 (ms) x height #2 (amplitude units)?
+\prg_new_protected_conditional:Npnn \__mriseq_label_fits:nn #1#2 { T , F , TF }
+  {
+    \bool_lazy_and:nnTF
+      { \fp_compare_p:nNn \l__mriseq_labw_fp < { (#1) * \l__mriseq_k_fp + 0.02 } }
+      { \fp_compare_p:nNn \l__mriseq_labh_fp < { abs( (#2) * \l__mriseq_cur_sc_tl ) - 0.03 } }
+      { \prg_return_true: } { \prg_return_false: }
+  }
+
+\cs_new_protected:cpn { __mriseq_draw_grad: }
+  {
+    \__mriseq_colors:nNN { mriseq-grad } \l__mriseq_gradmix_tl \l__mriseq_gradfill_tl
+    \__mriseq_trap_path:n { \l__mriseq_amp_fp }
+    \__mriseq_exec:e
+      {
+        \exp_not:N \draw [ mriseq/grad , draw = \l__mriseq_col_tl , fill = \l__mriseq_fill_tl ,
+                           \exp_not:V \l__mriseq_el_style_tl ]
+          \exp_not:V \l__mriseq_path_tl -- cycle ;
+      }
+    \__mriseq_grad_labels:nn { } { \c_false_bool }
+  }
+%  amplitude / area / custom labels; #1 = prefix (e.g. \pm), #2 = true for tables
+%  Amplitude labels go beyond the peak (above a positive, below a negative
+%  lobe).  Area labels go inside the flat top when they fit there completely,
+%  otherwise on the other side of the zero line.
+\tl_new:N \l__mriseq_amptext_tl
+\cs_new_protected:Npn \__mriseq_grad_labels:nn #1#2
+  {
+    \fp_compare:nNnTF \l__mriseq_amp_fp < { 0 }
+      { \tl_set:Nn \l__mriseq_row_tl { north } }
+      { \tl_set:Nn \l__mriseq_row_tl { south } }
+    % amplitude (or custom) label
+    \tl_clear:N \l__mriseq_amptext_tl
+    \tl_if_blank:VTF \l__mriseq_el_label_tl
+      {
+        \bool_if:NT \l__mriseq_amplabels_bool
+          {
+            \tl_set:Ne \l__mriseq_amptext_tl
+              { #1 \__mriseq_num:n { \l__mriseq_amp_fp } \tl_if_blank:VF \l__mriseq_gradunit_tl
+                  { \exp_not:N \, \exp_not:V \l__mriseq_gradunit_tl } }
+          }
+      }
+      { \tl_set_eq:NN \l__mriseq_amptext_tl \l__mriseq_el_label_tl }
+    \tl_if_blank:VF \l__mriseq_amptext_tl
+      {
+        \__mriseq_value_node:nnnn { \l__mriseq_c_fp } { \l__mriseq_amp_fp }
+          { \l__mriseq_row_tl } { \exp_not:V \l__mriseq_amptext_tl }
+      }
+    % area labels
+    \bool_if:NT \l__mriseq_arealabels_bool
+      {
+        \bool_if:nTF {#2}
+          {
+            \__mriseq_value_node:nnnn { \l__mriseq_c_fp } { - \l__mriseq_amp_fp } { north }
+              { #1 \__mriseq_num:n { \l__mriseq_area_fp } }
+          }
+          {
+            \tl_if_blank:VTF \l__mriseq_el_split_tl
+              {
+                \__mriseq_area_label:nnn { \l__mriseq_s_fp + \l__mriseq_ru_fp }
+                  { \l__mriseq_s_fp + \l__mriseq_ru_fp + \l__mriseq_flat_fp }
+                  { \__mriseq_num:n { \l__mriseq_area_fp } \tl_if_blank:VF \l__mriseq_areaunit_tl
+                      { \exp_not:N \, \exp_not:V \l__mriseq_areaunit_tl } }
+              }
+              {
+                \fp_set:Nn \l__mriseq_tmpb_fp { \__mriseq_trap_area:n { \l__mriseq_el_split_tl } }
+                \__mriseq_area_label:nnn { \l__mriseq_s_fp + \l__mriseq_ru_fp } { \l__mriseq_el_split_tl }
+                  { \__mriseq_num:n { \l__mriseq_tmpb_fp } }
+                \__mriseq_area_label:nnn { \l__mriseq_el_split_tl }
+                  { \l__mriseq_s_fp + \l__mriseq_ru_fp + \l__mriseq_flat_fp }
+                  { \__mriseq_num:n { \l__mriseq_area_fp - \l__mriseq_tmpb_fp } }
+              }
+          }
+      }
+  }
+%  #1 from, #2 to (ms, part of the flat top), #3 text
+\cs_new_protected:Npn \__mriseq_area_label:nnn #1#2#3
+  {
+    \__mriseq_measure:n {#3}
+    \__mriseq_label_fits:nnTF { (#2) - (#1) } { \l__mriseq_amp_fp }
+      {
+        \__mriseq_value_node:nnnnn { ( (#1) + (#2) ) / 2 } { \l__mriseq_amp_fp }
+          { \fp_compare:nNnTF \l__mriseq_amp_fp < { 0 } { south } { north } }
+          { \exp_not:V \l__mriseq_lab_tl } { mriseq/value~inside }
+      }
+      {
+        \__mriseq_value_node:nnnnn { ( (#1) + (#2) ) / 2 } { 0 }
+          { \fp_compare:nNnTF \l__mriseq_amp_fp < { 0 } { south } { north } }
+          { \exp_not:V \l__mriseq_lab_tl }
+          { mriseq/value~outside ,
+            yshift = \fp_compare:nNnTF \l__mriseq_amp_fp < { 0 } { 1.2pt } { -1.2pt } }
+      }
+  }
+
+% ---- phase-encoding table -----------------------------------------------
+\cs_new_protected:cpn { __mriseq_draw_ptable: }
+  {
+    \__mriseq_colors:nNN { mriseq-grad } \l__mriseq_gradmix_tl \l__mriseq_gradfill_tl
+    \fp_set:Nn \l__mriseq_tmpc_fp { abs( \l__mriseq_amp_fp ) }
+    % outline: hexagon
+    \tl_set:Ne \l__mriseq_path_tl
+      {
+        \__mriseq_pt:nn { \l__mriseq_s_fp } { 0 }
+        -- \__mriseq_pt:nn { \l__mriseq_s_fp + \l__mriseq_ru_fp } { \l__mriseq_tmpc_fp }
+        -- \__mriseq_pt:nn { \l__mriseq_s_fp + \l__mriseq_ru_fp + \l__mriseq_flat_fp } { \l__mriseq_tmpc_fp }
+        -- \__mriseq_pt:nn { \l__mriseq_e_fp } { 0 }
+        -- \__mriseq_pt:nn { \l__mriseq_s_fp + \l__mriseq_ru_fp + \l__mriseq_flat_fp } { - \l__mriseq_tmpc_fp }
+        -- \__mriseq_pt:nn { \l__mriseq_s_fp + \l__mriseq_ru_fp } { - \l__mriseq_tmpc_fp }
+        -- cycle
+      }
+    \__mriseq_exec:e
+      {
+        \exp_not:N \path [ fill = \l__mriseq_fill_tl ] \exp_not:V \l__mriseq_path_tl ;
+      }
+    % inner levels
+    % at most one line per 0.7 mm of height, and an odd number of lines
+    \int_set:Nn \l__mriseq_n_int
+      {
+        \int_min:nn { \l__mriseq_el_lines_tl }
+          { \fp_eval:n { 2 * floor( abs( \l__mriseq_tmpc_fp * \l__mriseq_cur_sc_tl ) / 0.07 ) + 1 } }
+      }
+    \int_compare:nNnT \l__mriseq_n_int > { 1 }
+      {
+        \tl_clear:N \l__mriseq_path_tl
+        \int_step_inline:nnn { 1 } { \l__mriseq_n_int - 2 }
+          {
+            \fp_set:Nn \l__mriseq_tmpa_fp
+              { \l__mriseq_tmpc_fp * ( 1 - 2 * ##1 / ( \l__mriseq_n_int - 1 ) ) }
+            \bool_if:NTF \l__mriseq_el_fan_bool
+              {
+                \tl_put_right:Ne \l__mriseq_path_tl
+                  {
+                    \__mriseq_pt:nn { \l__mriseq_s_fp } { 0 }
+                    -- \__mriseq_pt:nn { \l__mriseq_s_fp + \l__mriseq_ru_fp } { \l__mriseq_tmpa_fp }
+                    -- \__mriseq_pt:nn { \l__mriseq_s_fp + \l__mriseq_ru_fp + \l__mriseq_flat_fp } { \l__mriseq_tmpa_fp }
+                    -- \__mriseq_pt:nn { \l__mriseq_e_fp } { 0 }
+                  }
+              }
+              {
+                \tl_put_right:Ne \l__mriseq_path_tl
+                  {
+                    \__mriseq_pt:nn { \l__mriseq_s_fp + \l__mriseq_ru_fp * abs(\l__mriseq_tmpa_fp) / \l__mriseq_tmpc_fp } { \l__mriseq_tmpa_fp }
+                    -- \__mriseq_pt:nn { \l__mriseq_e_fp - \l__mriseq_rd_fp * abs(\l__mriseq_tmpa_fp) / \l__mriseq_tmpc_fp } { \l__mriseq_tmpa_fp }
+                  }
+              }
+          }
+        \__mriseq_exec:e
+          {
+            \exp_not:N \draw [ mriseq/phase~lines , draw = \l__mriseq_col_tl ]
+              \exp_not:V \l__mriseq_path_tl ;
+          }
+      }
+    % outer outline
+    \__mriseq_exec:e
+      {
+        \exp_not:N \draw [ mriseq/phase , draw = \l__mriseq_col_tl , \exp_not:V \l__mriseq_el_style_tl ]
+          \__mriseq_pt:nn { \l__mriseq_s_fp } { 0 }
+          -- \__mriseq_pt:nn { \l__mriseq_s_fp + \l__mriseq_ru_fp } { \l__mriseq_tmpc_fp }
+          -- \__mriseq_pt:nn { \l__mriseq_s_fp + \l__mriseq_ru_fp + \l__mriseq_flat_fp } { \l__mriseq_tmpc_fp }
+          -- \__mriseq_pt:nn { \l__mriseq_e_fp } { 0 }
+          -- \__mriseq_pt:nn { \l__mriseq_s_fp + \l__mriseq_ru_fp + \l__mriseq_flat_fp } { - \l__mriseq_tmpc_fp }
+          -- \__mriseq_pt:nn { \l__mriseq_s_fp + \l__mriseq_ru_fp } { - \l__mriseq_tmpc_fp }
+          -- cycle ;
+      }
+    % highlighted step
+    \tl_if_blank:VF \l__mriseq_el_highlight_tl
+      {
+        \fp_set:Nn \l__mriseq_tmpa_fp { \l__mriseq_tmpc_fp * (\l__mriseq_el_highlight_tl) }
+        \__mriseq_exec:e
+          {
+            \exp_not:N \draw [ mriseq/phase~highlight ]
+              \__mriseq_pt:nn { \l__mriseq_s_fp } { 0 }
+              -- \__mriseq_pt:nn { \l__mriseq_s_fp + \l__mriseq_ru_fp } { \l__mriseq_tmpa_fp }
+              -- \__mriseq_pt:nn { \l__mriseq_s_fp + \l__mriseq_ru_fp + \l__mriseq_flat_fp } { \l__mriseq_tmpa_fp }
+              -- \__mriseq_pt:nn { \l__mriseq_e_fp } { 0 } ;
+          }
+      }
+    % stepping arrow
+    \str_case:VnF \l__mriseq_el_arrow_tl
+      {
+        { down } { \tl_set:Nn \l__mriseq_tmp_tl { 1 } }
+        { up }   { \tl_set:Nn \l__mriseq_tmp_tl { -1 } }
+      }
+      { \tl_clear:N \l__mriseq_tmp_tl }
+    \tl_if_blank:VF \l__mriseq_tmp_tl
+      {
+        \__mriseq_exec:e
+          {
+            \exp_not:N \draw [ mriseq/phase~arrow ]
+              \__mriseq_pt:nn { \l__mriseq_e_fp + 0.12 * \l__mriseq_d_fp + 0.1 }
+                { \l__mriseq_tmp_tl * \l__mriseq_tmpc_fp }
+              -- \__mriseq_pt:nn { \l__mriseq_e_fp + 0.12 * \l__mriseq_d_fp + 0.1 }
+                { - \l__mriseq_tmp_tl * \l__mriseq_tmpc_fp } ;
+          }
+      }
+    \fp_set:Nn \l__mriseq_amp_fp { \l__mriseq_tmpc_fp }
+    \fp_set:Nn \l__mriseq_area_fp { abs( \l__mriseq_area_fp ) }
+    \__mriseq_grad_labels:nn { \exp_not:N \ensuremath { \exp_not:N \pm } } { \c_true_bool }
+  }
+
+% ---- ADC ----------------------------------------------------------------
+\cs_new_protected:cpn { __mriseq_draw_adc: }
+  {
+    \__mriseq_colors:nNN { mriseq-adc } \l__mriseq_adcmix_tl \l__mriseq_adcfill_tl
+    \__mriseq_exec:e
+      {
+        \exp_not:N \draw [ mriseq/adc , draw = \l__mriseq_col_tl , fill = \l__mriseq_fill_tl ,
+                           \exp_not:V \l__mriseq_el_style_tl ]
+          \__mriseq_pt:nn { \l__mriseq_s_fp } { -1 } rectangle
+          \__mriseq_pt:nn { \l__mriseq_e_fp } { 1 } ;
+      }
+    % sample ticks
+    \bool_lazy_all:nT
+      {
+        { \l__mriseq_el_ticks_bool }
+        { ! \tl_if_blank_p:V \l__mriseq_el_samples_tl }
+        { \int_compare_p:nNn { \l__mriseq_el_samples_tl } < { 513 } }
+      }
+      {
+        \tl_clear:N \l__mriseq_path_tl
+        \bool_if:NTF \l__mriseq_lin_bool
+          {
+            % linear time mapping: only one cheap evaluation per tick
+            \fp_set:Nn \l__mriseq_tmpb_fp { \__mriseq_xe:n { \l__mriseq_s_fp } }
+            \fp_set:Nn \l__mriseq_tmpc_fp
+              { \l__mriseq_d_fp * \l__mriseq_k_fp / ( \l__mriseq_el_samples_tl ) }
+            \tl_set:Ne \l__mriseq_tmp_tl
+              { ++ ( 0 , \fp_eval:n { round( 0.28 * \l__mriseq_cur_sc_tl , 4 ) } cm ) }
+            \tl_set:Ne \l__mriseq_type_tl { \__mriseq_y:n { -1 } }
+            \int_step_inline:nn { \l__mriseq_el_samples_tl }
+              {
+                \tl_put_right:Ne \l__mriseq_path_tl
+                  {
+                    ( \fp_eval:n { round( \l__mriseq_tmpb_fp + ( ##1 - 0.5 ) * \l__mriseq_tmpc_fp , 4 ) } cm ,
+                      \l__mriseq_type_tl cm ) -- \exp_not:V \l__mriseq_tmp_tl
+                  }
+              }
+          }
+          {
+            \int_step_inline:nn { \l__mriseq_el_samples_tl }
+              {
+                \fp_set:Nn \l__mriseq_tmpa_fp
+                  { \l__mriseq_s_fp + ( ##1 - 0.5 ) * \l__mriseq_d_fp / ( \l__mriseq_el_samples_tl ) }
+                \tl_put_right:Ne \l__mriseq_path_tl
+                  {
+                    \__mriseq_pt:nn { \l__mriseq_tmpa_fp } { -1 }
+                    -- \__mriseq_pt:nn { \l__mriseq_tmpa_fp } { -0.72 }
+                  }
+              }
+          }
+        \__mriseq_exec:e
+          {
+            \exp_not:N \draw [ mriseq/adc~ticks , draw = \l__mriseq_col_tl ]
+              \exp_not:V \l__mriseq_path_tl ;
+          }
+      }
+    % k = 0 marker
+    \tl_if_blank:VF \l__mriseq_el_kzero_tl
+      {
+        \__mriseq_exec:e
+          {
+            \exp_not:N \draw [ mriseq/kzero , draw = \l__mriseq_col_tl ]
+              \__mriseq_pt:nn { \l__mriseq_el_kzero_tl } { 0 } circle [ radius = 1.6pt ] ;
+          }
+      }
+    % label
+    \tl_if_blank:VTF \l__mriseq_el_label_tl
+      {
+        \bool_lazy_all:nT
+          {
+            { \l__mriseq_adclabels_bool }
+            { ! \tl_if_blank_p:V \l__mriseq_el_samples_tl }
+            { ! \tl_if_blank_p:V \l__mriseq_el_dwell_tl }
+          }
+          {
+            \tl_set:Ne \l__mriseq_el_label_tl
+              {
+                \__mriseq_num:n { \l__mriseq_el_samples_tl }
+                \exp_not:N \, \exp_not:N \ensuremath { \exp_not:N \times } \exp_not:N \,
+                \__mriseq_num:n { (\l__mriseq_el_dwell_tl) * 1000 }
+                \exp_not:N \, \exp_not:N \ensuremath { \exp_not:N \mu } s
+              }
+          }
+      }
+      { }
+    \tl_if_blank:VF \l__mriseq_el_label_tl
+      {
+        \__mriseq_value_node:nnnn { \l__mriseq_s_fp } { 1 } { south~west }
+          { \exp_not:V \l__mriseq_el_label_tl }
+      }
+  }
+
+% ---- signals ------------------------------------------------------------
+\tl_new:N \l__mriseq_sep_tl
+\cs_new_protected:Npn \__mriseq_signal_path:nn #1#2
+  % #1 = start, #2 = expression in t (absolute time) using \l__mriseq_tmpa_fp
+  {
+    \tl_if_blank:VT \l__mriseq_el_res_tl
+      { \tl_set:Nn \l__mriseq_el_res_tl { 150 } }
+    \int_set:Nn \l__mriseq_n_int { \l__mriseq_el_res_tl }
+    \tl_clear:N \l__mriseq_path_tl
+    \int_step_inline:nnn { 0 } { \l__mriseq_n_int }
+      {
+        \fp_set:Nn \l__mriseq_tmpa_fp { #1 + ##1 * \l__mriseq_d_fp / \l__mriseq_n_int }
+        \tl_put_right:Ne \l__mriseq_path_tl
+          {
+            \int_compare:nNnF {##1} = { 0 } { \l__mriseq_sep_tl }
+            \__mriseq_pt:nn { \l__mriseq_tmpa_fp } { #2 }
+          }
+      }
+  }
+\cs_new_protected:Npn \__mriseq_signal_draw:nnn #1#2#3
+  % #1 start, #2 envelope expression (t = \l__mriseq_tmpa_fp),
+  % #3 the envelope in pgfmath syntax (reserved for a faster path; unused)
+  %
+  {
+    \__mriseq_colors:nNN { mriseq-signal } \l__mriseq_sigmix_tl \c_empty_tl
+    \fp_set_eq:NN \l__mriseq_tmpc_fp \l__mriseq_ttwo_fp
+    \tl_if_blank:VT \l__mriseq_el_res_tl
+      {
+        \tl_set:Ne \l__mriseq_el_res_tl
+          {
+            \fp_eval:n
+              { min( 160 , ceil( 5 * abs(\l__mriseq_el_cycles_tl) * \l__mriseq_d_fp / \l__mriseq_ttwo_fp ) + 8 ) }
+          }
+      }
+    {
+    \bool_if:NTF \l__mriseq_el_osc_bool
+      {
+        \tl_clear:N \l__mriseq_sep_tl
+        \__mriseq_signal_path:nn {#1}
+          {
+            \l__mriseq_amp_fp * (#2) * cos( 2 * pi * (\l__mriseq_el_cycles_tl) / \l__mriseq_tmpc_fp
+                                         * ( \l__mriseq_tmpa_fp - \l__mriseq_c_fp ) )
+          }
+        \__mriseq_exec:e
+          {
+            \exp_not:N \draw [ mriseq/signal , draw = \l__mriseq_col_tl , \exp_not:V \l__mriseq_el_style_tl ]
+              plot [ smooth , tension = 0.55 ] coordinates { \exp_not:V \l__mriseq_path_tl } ;
+          }
+      }
+      {
+        \tl_set:Nn \l__mriseq_sep_tl { -- }
+        \__mriseq_signal_path:nn {#1} { \l__mriseq_amp_fp * (#2) }
+        \tl_set_eq:NN \l__mriseq_tmp_tl \l__mriseq_path_tl
+        \fp_set:Nn \l__mriseq_amp_fp { - \l__mriseq_amp_fp }
+        \__mriseq_signal_path:nn {#1} { \l__mriseq_amp_fp * (#2) }
+        \__mriseq_exec:e
+          {
+            \exp_not:N \draw [ mriseq/signal , draw = \l__mriseq_col_tl , fill = \l__mriseq_fill_tl ,
+                               \exp_not:V \l__mriseq_el_style_tl ]
+              \exp_not:V \l__mriseq_tmp_tl ;
+            \exp_not:N \draw [ mriseq/signal , draw = \l__mriseq_col_tl , fill = \l__mriseq_fill_tl ,
+                               \exp_not:V \l__mriseq_el_style_tl ]
+              \exp_not:V \l__mriseq_path_tl ;
+          }
+      }
+    }
+  }
+\cs_new_protected:cpn { __mriseq_draw_fid: }
+  {
+    \__mriseq_signal_draw:nnn { \l__mriseq_s_fp }
+      { exp( - ( \l__mriseq_tmpa_fp - \l__mriseq_s_fp ) / \l__mriseq_tmpc_fp ) }
+      { exp( - ( \exp_not:N \t - \fp_eval:n { \l__mriseq_s_fp } ) / \fp_eval:n { \l__mriseq_ttwo_fp } ) }
+  }
+\cs_new_protected:cpn { __mriseq_draw_echo: }
+  {
+    \__mriseq_signal_draw:nnn { \l__mriseq_s_fp }
+      { exp( - abs( \l__mriseq_tmpa_fp - \l__mriseq_c_fp ) / \l__mriseq_tmpc_fp ) }
+      { exp( - abs( \exp_not:N \t - \fp_eval:n { \l__mriseq_c_fp } ) / \fp_eval:n { \l__mriseq_ttwo_fp } ) }
+  }
+
+% ---- free waveform ------------------------------------------------------
+\cs_new_protected:cpn { __mriseq_draw_wave: }
+  {
+    \str_case:VnF \l__mriseq_group_tl
+      {
+        { rf }  { \__mriseq_colors:nNN { mriseq-rf-excite } \l__mriseq_rfmix_tl \l__mriseq_rffill_tl }
+        { adc } { \__mriseq_colors:nNN { mriseq-adc } \l__mriseq_adcmix_tl \l__mriseq_adcfill_tl }
+        { sig } { \__mriseq_colors:nNN { mriseq-signal } \l__mriseq_sigmix_tl \c_empty_tl }
+        { mz }  { \__mriseq_colors:nNN { mriseq-signal } \l__mriseq_sigmix_tl \c_empty_tl }
+        { kx }  { \__mriseq_colors:nNN { mriseq-k } \l__mriseq_sigmix_tl \c_empty_tl }
+        { ky }  { \__mriseq_colors:nNN { mriseq-k } \l__mriseq_sigmix_tl \c_empty_tl }
+        { kz }  { \__mriseq_colors:nNN { mriseq-k } \l__mriseq_sigmix_tl \c_empty_tl }
+      }
+      { \__mriseq_colors:nNN { mriseq-grad } \l__mriseq_gradmix_tl \l__mriseq_gradfill_tl }
+    \tl_clear:N \l__mriseq_path_tl
+    \bool_set_true:N \l_tmpa_bool
+    \exp_args:NV \clist_map_inline:nn \l__mriseq_el_points_tl
+      {
+        \bool_if:NTF \l_tmpa_bool
+          { \bool_set_false:N \l_tmpa_bool }
+          { \tl_put_right:Nn \l__mriseq_path_tl { -- } }
+        \__mriseq_wave_point:w ##1 \q_stop
+      }
+    \bool_if:NTF \l__mriseq_el_filled_bool
+      {
+        \__mriseq_exec:e
+          {
+            \exp_not:N \path [ fill = \l__mriseq_fill_tl ]
+              \__mriseq_pt:nn { \l__mriseq_s_fp } { 0 } --
+              \exp_not:V \l__mriseq_path_tl -- \__mriseq_pt:nn { \l__mriseq_e_fp } { 0 } -- cycle ;
+          }
+      }
+      { }
+    \__mriseq_exec:e
+      {
+        \exp_not:N \draw [ mriseq/wave , draw = \l__mriseq_col_tl , \exp_not:V \l__mriseq_el_style_tl ]
+          \exp_not:V \l__mriseq_path_tl ;
+      }
+    \tl_if_blank:VF \l__mriseq_el_label_tl
+      {
+        \__mriseq_value_node:nnnn { ( \l__mriseq_s_fp + \l__mriseq_e_fp ) / 2 } { \l__mriseq_max_fp }
+          { south } { \exp_not:V \l__mriseq_el_label_tl }
+      }
+  }
+\cs_new_protected:Npn \__mriseq_wave_point:w #1 / #2 \q_stop
+  { \tl_put_right:Ne \l__mriseq_path_tl { \__mriseq_pt:nn {#1} {#2} } }
+
+% ---- shaded areas -------------------------------------------------------
+%  \shadearea fills the part of the waveforms of one row between two times.
+\tl_new:N \l__mriseq_shade_row_tl
+\tl_new:N \l__mriseq_shade_style_tl
+\fp_new:N \l__mriseq_shade_from_fp
+\fp_new:N \l__mriseq_shade_to_fp
+\fp_new:N \g__mriseq_shade_area_fp
+\fp_new:N \g__mriseq_shade_amp_fp
+\cs_new_protected:Npn \__mriseq_draw_shade:n #1
+  {
+    \seq_if_in:NnT \l__mriseq_vrows_seq {#1}
+      {
+        \tl_set:Nn \l__mriseq_shade_row_tl {#1}
+        \tl_if_blank:VT \l__mriseq_el_style_tl { \tl_set:Nn \l__mriseq_el_style_tl { A } }
+        \str_case_e:nnF { \tl_to_str:V \l__mriseq_el_style_tl }
+          {
+            { A } { \tl_set:Nn \l__mriseq_shade_style_tl { mriseq/area~A } }
+            { B } { \tl_set:Nn \l__mriseq_shade_style_tl { mriseq/area~B } }
+            { C } { \tl_set:Nn \l__mriseq_shade_style_tl { mriseq/area~C } }
+            { D } { \tl_set:Nn \l__mriseq_shade_style_tl { mriseq/area~D } }
+          }
+          { \tl_set_eq:NN \l__mriseq_shade_style_tl \l__mriseq_el_style_tl }
+        \fp_set:Nn \l__mriseq_shade_from_fp { \l__mriseq_el_from_tl }
+        \fp_set:Nn \l__mriseq_shade_to_fp { \l__mriseq_el_to_tl }
+        \tl_set_eq:NN \l__mriseq_lab_tl \l__mriseq_el_label_tl
+        \__mriseq_use_row:n {#1}
+        \fp_gzero:N \g__mriseq_shade_area_fp
+        \fp_gzero:N \g__mriseq_shade_amp_fp
+        \__mriseq_exec:e
+          {
+            \exp_not:N \begin{scope}
+            \exp_not:N \clip
+              ( \__mriseq_x:n { \l__mriseq_shade_from_fp } cm , \tl_use:c { l__mriseq_row_#1_ytop_tl } cm )
+              rectangle
+              ( \__mriseq_x:n { \l__mriseq_shade_to_fp } cm , \l__mriseq_cur_ybot_tl cm ) ;
+          }
+        \group_begin:
+          \cs_set_eq:NN \__mriseq_item:nnn \__mriseq_shade_item:nnn
+          \g__mriseq_items_tl
+        \group_end:
+        \end{scope}
+        % label: "auto" prints the area of the shaded part
+        \tl_if_blank:VF \l__mriseq_lab_tl
+          {
+            \str_if_eq:VnT \l__mriseq_lab_tl { auto }
+              {
+                \tl_set:Ne \l__mriseq_lab_tl
+                  { \__mriseq_num:n { \g__mriseq_shade_area_fp } \tl_if_blank:VF \l__mriseq_areaunit_tl
+                      { \exp_not:N \, \exp_not:V \l__mriseq_areaunit_tl } }
+              }
+            \__mriseq_use_row:n {#1}
+            \fp_set_eq:NN \l__mriseq_amp_fp \g__mriseq_shade_amp_fp
+            \__mriseq_measure:n { \exp_not:V \l__mriseq_lab_tl }
+            \__mriseq_label_fits:nnTF
+              { \l__mriseq_shade_to_fp - \l__mriseq_shade_from_fp } { \l__mriseq_amp_fp }
+              {
+                \__mriseq_value_node:nnnnn
+                  { ( \l__mriseq_shade_from_fp + \l__mriseq_shade_to_fp ) / 2 } { \l__mriseq_amp_fp / 2 }
+                  { center } { \exp_not:V \l__mriseq_lab_tl } { mriseq/value~inside , mriseq/area~label }
+              }
+              {
+                \__mriseq_value_node:nnnnn
+                  { ( \l__mriseq_shade_from_fp + \l__mriseq_shade_to_fp ) / 2 } { 0 }
+                  { \fp_compare:nNnTF \l__mriseq_amp_fp < { 0 } { south } { north } }
+                  { \exp_not:V \l__mriseq_lab_tl }
+                  { mriseq/value~outside , mriseq/area~label ,
+                    yshift = \fp_compare:nNnTF \l__mriseq_amp_fp < { 0 } { 1.2pt } { -1.2pt } }
+              }
+          }
+      }
+  }
+\cs_new_protected:Npn \__mriseq_shade_item:nnn #1#2#3
+  {
+    \str_if_eq:VnT \l__mriseq_shade_row_tl {#2}
+      {
+        \str_case:nn {#1}
+          {
+            { grad }   { \__mriseq_shade_trap:nnn {#1} {#2} {#3} }
+            { ptable } { \__mriseq_shade_trap:nnn {#1} {#2} {#3} }
+          }
+      }
+  }
+\cs_new_protected:Npn \__mriseq_shade_trap:nnn #1#2#3
+  {
+    \group_begin:
+      \keys_set:nn { mriseq / el } {#3}
+      \__mriseq_compute:n {#1}
+      \bool_lazy_and:nnT
+        { \fp_compare_p:nNn \l__mriseq_e_fp > \l__mriseq_shade_from_fp }
+        { \fp_compare_p:nNn \l__mriseq_s_fp < \l__mriseq_shade_to_fp }
+        {
+          \str_if_eq:nnT {#1} { ptable }
+            {
+              \fp_set:Nn \l__mriseq_amp_fp
+                { abs( \l__mriseq_amp_fp ) * \tl_if_blank:VTF \l__mriseq_el_highlight_tl { 1 } { ( \l__mriseq_el_highlight_tl ) } }
+            }
+          \__mriseq_colors:nNN { mriseq-grad } \l__mriseq_gradmix_tl \l__mriseq_gradfill_tl
+          \__mriseq_trap_path:n { \l__mriseq_amp_fp }
+          \__mriseq_exec:e
+            {
+              \exp_not:N \fill [ \exp_not:V \l__mriseq_shade_style_tl ]
+                \exp_not:V \l__mriseq_path_tl -- cycle ;
+              \exp_not:N \draw [ mriseq/grad , draw = \l__mriseq_col_tl ]
+                \exp_not:V \l__mriseq_path_tl -- cycle ;
+            }
+          \fp_gadd:Nn \g__mriseq_shade_area_fp
+            {
+              \__mriseq_trap_area:n { min( max( \l__mriseq_shade_to_fp , \l__mriseq_s_fp ) , \l__mriseq_e_fp ) }
+              - \__mriseq_trap_area:n { min( max( \l__mriseq_shade_from_fp , \l__mriseq_s_fp ) , \l__mriseq_e_fp ) }
+            }
+          \fp_compare:nNnT { abs( \l__mriseq_amp_fp ) } > { abs( \g__mriseq_shade_amp_fp ) }
+            { \fp_gset_eq:NN \g__mriseq_shade_amp_fp \l__mriseq_amp_fp }
+        }
+    \group_end:
+  }
+
+% ---- markers ------------------------------------------------------------
+\cs_new_protected:Npn \__mriseq_draw_marker:
+  {
+    \bool_if:NT \l__mriseq_markers_bool
+      {
+        \tl_if_blank:VT \l__mriseq_el_kind_tl { \tl_set:Nn \l__mriseq_el_kind_tl { plain } }
+        \str_case:VnF \l__mriseq_el_kind_tl
+          {
+            { echo } { \tl_set:Nn \l__mriseq_tmp_tl { mriseq/echo~marker } }
+          }
+          { \tl_set:Nn \l__mriseq_tmp_tl { mriseq/marker } }
+        \tl_if_blank:VTF \l__mriseq_el_color_tl
+          {
+            \str_case:VnF \l__mriseq_el_kind_tl
+              {
+                { echo }    { \tl_set:Nn \l__mriseq_col_tl { mriseq-echo } }
+                { excite }  { \tl_set:Nn \l__mriseq_col_tl { mriseq-rf-excite } }
+                { refocus } { \tl_set:Nn \l__mriseq_col_tl { mriseq-rf-refocus } }
+                { invert }  { \tl_set:Nn \l__mriseq_col_tl { mriseq-rf-invert } }
+              }
+              { \tl_set:Nn \l__mriseq_col_tl { mriseq-marker } }
+          }
+          { \tl_set_eq:NN \l__mriseq_col_tl \l__mriseq_el_color_tl }
+        \fp_set:Nn \l__mriseq_tmpa_fp { \__mriseq_xe:n { \l__mriseq_el_center_tl } }
+        \str_if_eq:VnT \l__mriseq_mode_tl { lines }
+          {
+            \__mriseq_exec:e
+              {
+                \exp_not:N \draw [ \l__mriseq_tmp_tl , draw = \l__mriseq_col_tl , \exp_not:V \l__mriseq_el_style_tl ]
+                  ( \fp_eval:n { \l__mriseq_tmpa_fp } cm , 0cm ) --
+                  ( \fp_eval:n { \l__mriseq_tmpa_fp } cm , \fp_eval:n { \l__mriseq_ybot_fp } cm ) ;
+              }
+          }
+        \bool_lazy_all:nT
+          {
+            { \str_if_eq_p:Vn \l__mriseq_mode_tl { labels } }
+            { ! \tl_if_blank_p:V \l__mriseq_el_label_tl }
+            { \fp_compare_p:nNn \l__mriseq_tmpa_fp > { -0.001 } }
+            { \fp_compare_p:nNn \l__mriseq_tmpa_fp < { \l__mriseq_width_fp + 0.001 } }
+          }
+          {
+            \str_if_eq:VnTF \l__mriseq_el_kind_tl { echo }
+              {
+                \__mriseq_exec:e
+                  {
+                    \exp_not:N \fill [ \l__mriseq_col_tl ]
+                      ( \fp_eval:n { \l__mriseq_tmpa_fp } cm , 0.04cm ) --
+                      ( \fp_eval:n { \l__mriseq_tmpa_fp - 0.07 } cm , 0.17cm ) --
+                      ( \fp_eval:n { \l__mriseq_tmpa_fp + 0.07 } cm , 0.17cm ) -- cycle ;
+                    \exp_not:N \node [ mriseq/marker~label , anchor = west ]
+                      at ( \fp_eval:n { \l__mriseq_tmpa_fp + 0.07 } cm , 0.12cm )
+                      { \exp_not:V \l__mriseq_el_label_tl } ;
+                  }
+              }
+              {
+                \__mriseq_exec:e
+                  {
+                    \exp_not:N \node [ mriseq/marker~label , anchor = south ]
+                      at ( \fp_eval:n { \l__mriseq_tmpa_fp } cm , 0.02cm )
+                      { \exp_not:V \l__mriseq_el_label_tl } ;
+                  }
+              }
+          }
+      }
+  }
+
+% ---- intervals ----------------------------------------------------------
+\cs_new_protected:Npn \__mriseq_draw_interval:
+  {
+    \fp_set:Nn \l__mriseq_tmpa_fp { \__mriseq_xe:n { \l__mriseq_el_from_tl } }
+    \fp_set:Nn \l__mriseq_tmpb_fp { \__mriseq_xe:n { \l__mriseq_el_to_tl } }
+    \bool_set_false:N \l_tmpa_bool
+    \str_case:VnF \l__mriseq_el_pos_tl
+      {
+        { top }
+          {
+            \bool_set_true:N \l_tmpa_bool
+            \fp_set:Nn \l__mriseq_tmpc_fp
+              {
+                \bool_if:NTF \g__mriseq_markerlabel_bool
+                  { \dim_to_decimal_in_unit:nn { \l__mriseq_markerspace_dim } { 1cm } } { 0.08 }
+                + ( \l__mriseq_el_level_tl - 1 )
+                  * \dim_to_decimal_in_unit:nn { \l__mriseq_intervalsep_dim } { 1cm } + 0.1
+              }
+          }
+        { bottom }
+          {
+            \fp_set:Nn \l__mriseq_tmpc_fp
+              {
+                \l__mriseq_yaxis_fp
+                - \bool_lazy_or:nnTF { \l__mriseq_ticks_bool } { \l__mriseq_axis_bool } { 0.45 } { 0.05 }
+                - ( \l__mriseq_el_level_tl - 0.5 )
+                  * \dim_to_decimal_in_unit:nn { \l__mriseq_intervalsep_dim } { 1cm }
+              }
+          }
+      }
+      {
+        \seq_if_in:NVTF \l__mriseq_vrows_seq \l__mriseq_el_pos_tl
+          {
+            \__mriseq_use_row:V \l__mriseq_el_pos_tl
+            \fp_set:Nn \l__mriseq_tmpc_fp
+              { \l__mriseq_cur_ybot_tl + (\l__mriseq_el_height_tl) * \l__mriseq_cur_h_tl }
+          }
+          { \fp_set:Nn \l__mriseq_tmpc_fp { nan } }
+      }
+    % clip the interval to the time window; no arrow tip at a clipped end
+    \tl_set:Ne \l__mriseq_tmp_tl
+      {
+        \fp_compare:nNnTF \l__mriseq_tmpa_fp < { -0.001 } { } { Stealth[length=3.5pt] } -
+        \fp_compare:nNnTF \l__mriseq_tmpb_fp > { \l__mriseq_width_fp + 0.001 } { } { Stealth[length=3.5pt] }
+      }
+    \fp_set:Nn \l__mriseq_tmpa_fp { max( \l__mriseq_tmpa_fp , 0 ) }
+    \fp_set:Nn \l__mriseq_tmpb_fp { min( \l__mriseq_tmpb_fp , \l__mriseq_width_fp ) }
+    \fp_compare:nNnF { \l__mriseq_tmpb_fp - \l__mriseq_tmpa_fp } > { 0.05 }
+      { \fp_set:Nn \l__mriseq_tmpc_fp { nan } }
+    \fp_if_nan:nF { \l__mriseq_tmpc_fp }
+      {
+        \__mriseq_exec:e
+          {
+            \bool_lazy_all:nT
+              { { \l_tmpa_bool } { \l__mriseq_el_guides_bool } { \str_if_eq_p:Vn \l__mriseq_mode_tl { lines } } }
+              {
+                \exp_not:N \draw [ mriseq/guide ]
+                  ( \fp_eval:n { \l__mriseq_tmpa_fp } cm , \fp_eval:n { \l__mriseq_tmpc_fp } cm )
+                  -- ( \fp_eval:n { \l__mriseq_tmpa_fp } cm , 0cm )
+                  ( \fp_eval:n { \l__mriseq_tmpb_fp } cm , \fp_eval:n { \l__mriseq_tmpc_fp } cm )
+                  -- ( \fp_eval:n { \l__mriseq_tmpb_fp } cm , 0cm ) ;
+              }
+            \str_if_eq:VnT \l__mriseq_mode_tl { annot }
+              {
+                \exp_not:N \draw [ mriseq/interval , arrows = { \l__mriseq_tmp_tl } ,
+                                   \exp_not:V \l__mriseq_el_style_tl ]
+                  ( \fp_eval:n { \l__mriseq_tmpa_fp } cm , \fp_eval:n { \l__mriseq_tmpc_fp } cm )
+                  -- node [ mriseq/interval~label , anchor = south , fill = mriseq-bg ]
+                     { \exp_not:V \l__mriseq_el_label_tl }
+                  ( \fp_eval:n { \l__mriseq_tmpb_fp } cm , \fp_eval:n { \l__mriseq_tmpc_fp } cm ) ;
+              }
+          }
+      }
+  }
+\cs_generate_variant:Nn \__mriseq_use_row:n { V }
+\cs_generate_variant:Nn \seq_if_in:NnTF { NV }
+
+% ---- background, axis and breaks ---------------------------------------
+\cs_new_protected:Npn \__mriseq_tick_step:
+  {
+    \tl_if_blank:VTF \l__mriseq_tickstep_tl
+      {
+        \fp_set:Nn \l__mriseq_tmpa_fp { \l__mriseq_width_fp / \l__mriseq_k_fp / 9 }
+        \fp_set:Nn \l__mriseq_tmpb_fp { 10 ^ floor( ln( \l__mriseq_tmpa_fp ) / ln(10) ) }
+        \fp_set:Nn \l__mriseq_tmpa_fp { \l__mriseq_tmpa_fp / \l__mriseq_tmpb_fp }
+        \fp_set:Nn \l__mriseq_step_fp
+          {
+            \l__mriseq_tmpb_fp *
+            ( \l__mriseq_tmpa_fp < 1.5 ? 1 : ( \l__mriseq_tmpa_fp < 3.5 ? 2 : ( \l__mriseq_tmpa_fp < 7.5 ? 5 : 10 ) ) )
+          }
+      }
+      { \fp_set:Nn \l__mriseq_step_fp { \l__mriseq_tickstep_tl } }
+  }
+%  is time #1 inside a break?  (with a small margin)
+\cs_new_protected:Npn \__mriseq_if_in_break:nTF #1#2#3
+  {
+    \bool_set_false:N \l_tmpb_bool
+    \seq_map_inline:Nn \l__mriseq_breaks_seq
+      {
+        \fp_compare:nT
+          {
+            \use_i:nn ##1 - 0.2 * \l__mriseq_step_fp < #1 < \use_ii:nn ##1 + 0.2 * \l__mriseq_step_fp
+          }
+          { \bool_set_true:N \l_tmpb_bool }
+      }
+    \bool_if:NTF \l_tmpb_bool {#2} {#3}
+  }
+
+\prg_generate_conditional_variant:Nnn \tl_if_blank:n { v } { T , F , TF }
+\cs_new_protected:Npn \__mriseq_draw_background:
+  {
+    % grid
+    \bool_if:NT \l__mriseq_grid_bool
+      {
+        \__mriseq_tick_step:
+        \tl_clear:N \l__mriseq_path_tl
+        \int_step_inline:nnn
+          { \fp_eval:n { ceil( \l__mriseq_tmin_fp / \l__mriseq_step_fp ) } }
+          { \fp_eval:n { floor( \l__mriseq_tmax_fp / \l__mriseq_step_fp ) } }
+          {
+            \__mriseq_if_in_break:nTF { ##1 * \l__mriseq_step_fp } { }
+              {
+                \tl_put_right:Ne \l__mriseq_path_tl
+                  {
+                    ( \__mriseq_x:n { ##1 * \l__mriseq_step_fp } cm , 0cm ) --
+                    ( \__mriseq_x:n { ##1 * \l__mriseq_step_fp } cm , \fp_eval:n { \l__mriseq_ybot_fp } cm )
+                  }
+              }
+          }
+        \__mriseq_exec:e { \exp_not:N \draw [ mriseq/grid ] \exp_not:V \l__mriseq_path_tl ; }
+      }
+    % rows: separators, baselines, labels
+    \seq_map_inline:Nn \l__mriseq_vrows_seq
+      {
+        \__mriseq_use_row:n {##1}
+        \bool_if:NT \l__mriseq_rowlines_bool
+          {
+            \__mriseq_exec:e
+              {
+                \exp_not:N \draw [ mriseq/row~line ]
+                  ( \fp_eval:n { \l__mriseq_xlab_fp } cm , \l__mriseq_cur_ybot_tl cm ) --
+                  ( \fp_eval:n { \l__mriseq_width_fp } cm , \l__mriseq_cur_ybot_tl cm ) ;
+              }
+          }
+        \bool_if:NT \l__mriseq_baselines_bool
+          {
+            \__mriseq_exec:e
+              {
+                \exp_not:N \draw [ mriseq/baseline ]
+                  ( 0cm , \l__mriseq_cur_yb_tl cm ) --
+                  ( \fp_eval:n { \l__mriseq_width_fp } cm , \l__mriseq_cur_yb_tl cm ) ;
+              }
+          }
+        \bool_if:NT \l__mriseq_rowlabels_bool
+          {
+            \__mriseq_exec:e
+              {
+                \exp_not:N \node [ mriseq/row~label , anchor = west ]
+                  at ( \fp_eval:n { \l__mriseq_xlab_fp } cm ,
+                       \fp_eval:n { ( \tl_use:c { l__mriseq_row_##1_ytop_tl } + \l__mriseq_cur_ybot_tl ) / 2 } cm )
+                  {
+                    \exp_not:v { l__mriseq_row_##1_label_tl }
+                    \tl_if_blank:vF { l__mriseq_row_##1_sub_tl }
+                      {
+                        \exp_not:N \\ [ -1pt ]
+                        { \exp_not:N \mriseq@sublabelfont \exp_not:v { l__mriseq_row_##1_sub_tl } }
+                      }
+                  } ;
+              }
+          }
+      }
+    \bool_if:NT \l__mriseq_rowlines_bool
+      {
+        \seq_if_empty:NF \l__mriseq_vrows_seq
+          {
+            \__mriseq_exec:e
+              {
+                \exp_not:N \draw [ mriseq/row~line ]
+                  ( \fp_eval:n { \l__mriseq_xlab_fp } cm , 0cm ) --
+                  ( \fp_eval:n { \l__mriseq_width_fp } cm , 0cm ) ;
+              }
+          }
+      }
+  }
+
+\cs_new_protected:Npn \__mriseq_draw_axis:
+  {
+    \bool_if:NTF \l__mriseq_ticks_bool
+      {
+        \__mriseq_tick_step:
+        % axis line, interrupted at the breaks
+        \tl_clear:N \l__mriseq_path_tl
+        \fp_set_eq:NN \l__mriseq_tmpb_fp \l__mriseq_tmin_fp
+        \seq_map_inline:Nn \l__mriseq_breaks_seq
+          {
+            \tl_put_right:Ne \l__mriseq_path_tl
+              {
+                ( \__mriseq_x:n { \l__mriseq_tmpb_fp } cm , \fp_eval:n { \l__mriseq_yaxis_fp } cm ) --
+                ( \fp_eval:n { \__mriseq_xe:n { (\use_i:nn ##1 + \use_ii:nn ##1) / 2 } - 0.06 } cm ,
+                  \fp_eval:n { \l__mriseq_yaxis_fp } cm )
+              }
+            \fp_set:Nn \l__mriseq_tmpb_fp { \use_ii:nn ##1 }
+            \tl_put_right:Ne \l__mriseq_path_tl
+              {
+                ( \fp_eval:n { \__mriseq_xe:n { (\use_i:nn ##1 + \use_ii:nn ##1) / 2 } + 0.06 } cm ,
+                  \fp_eval:n { \l__mriseq_yaxis_fp } cm )
+              }
+          }
+        \tl_put_right:Ne \l__mriseq_path_tl
+          {
+            \seq_if_empty:NF \l__mriseq_breaks_seq { -- }
+            \seq_if_empty:NT \l__mriseq_breaks_seq
+              { ( 0cm , \fp_eval:n { \l__mriseq_yaxis_fp } cm ) -- }
+            ( \fp_eval:n { \l__mriseq_width_fp } cm , \fp_eval:n { \l__mriseq_yaxis_fp } cm )
+          }
+        \__mriseq_exec:e { \exp_not:N \draw [ mriseq/axis ] \exp_not:V \l__mriseq_path_tl ; }
+        % ticks
+        \int_step_inline:nnn
+          { \fp_eval:n { ceil( \l__mriseq_tmin_fp / \l__mriseq_step_fp ) } }
+          { \fp_eval:n { floor( \l__mriseq_tmax_fp / \l__mriseq_step_fp ) } }
+          {
+            \__mriseq_if_in_break:nTF { ##1 * \l__mriseq_step_fp } { }
+              {
+                \__mriseq_exec:e
+                  {
+                    \exp_not:N \draw [ mriseq/axis ]
+                      ( \__mriseq_x:n { ##1 * \l__mriseq_step_fp } cm , \fp_eval:n { \l__mriseq_yaxis_fp } cm )
+                      -- ++ ( 0 , -0.08cm )
+                      node [ mriseq/tick~label , anchor = north ]
+                      { \fp_eval:n { round( ##1 * \l__mriseq_step_fp , 3 ) } } ;
+                  }
+              }
+          }
+        \bool_if:NT \l__mriseq_rowlabels_bool
+          {
+            \__mriseq_exec:e
+              {
+                \exp_not:N \node [ mriseq/tick~label , anchor = north~west ]
+                  at ( \fp_eval:n { \l__mriseq_xlab_fp } cm , \fp_eval:n { \l__mriseq_yaxis_fp - 0.08 } cm )
+                  { \exp_not:V \l__mriseq_axislabel_tl } ;
+              }
+          }
+      }
+      {
+        \bool_if:NT \l__mriseq_axis_bool
+          {
+            \__mriseq_exec:e
+              {
+                \exp_not:N \draw [ mriseq/axis~arrow ]
+                  ( 0cm , \fp_eval:n { \l__mriseq_yaxis_fp } cm ) --
+                  ( \fp_eval:n { \l__mriseq_width_fp } cm , \fp_eval:n { \l__mriseq_yaxis_fp } cm )
+                  node [ mriseq/tick~label , anchor = north~east ] { \exp_not:V \l__mriseq_timelabel_tl } ;
+              }
+          }
+      }
+  }
+
+\cs_new_protected:Npn \__mriseq_draw_breaks:
+  {
+    \seq_map_inline:Nn \l__mriseq_breaks_seq
+      {
+        \fp_set:Nn \l__mriseq_tmpa_fp { \__mriseq_xe:n { (\use_i:nn ##1 + \use_ii:nn ##1) / 2 } }
+        \seq_map_inline:Nn \l__mriseq_vrows_seq
+          {
+            \__mriseq_use_row:n {####1}
+            \__mriseq_break_symbol:nn { \l__mriseq_tmpa_fp } { \l__mriseq_cur_yb_tl }
+          }
+        \bool_if:NT \l__mriseq_ticks_bool
+          { \__mriseq_break_symbol:nn { \l__mriseq_tmpa_fp } { \l__mriseq_yaxis_fp } }
+      }
+  }
+\cs_new_protected:Npn \__mriseq_break_symbol:nn #1#2
+  { \use:c { __mriseq_break_ \l__mriseq_breakstyle_tl :nn } {#1} {#2} }
+\cs_new_protected:Npn \__mriseq_break_none:nn #1#2 { }
+\cs_new_protected:Npn \__mriseq_break_zigzag:nn #1#2
+  {
+    \__mriseq_exec:e
+      {
+        \exp_not:N \fill [ mriseq-bg ]
+          ( \fp_eval:n { #1 - 0.13 } cm , \fp_eval:n { #2 - 0.03 } cm ) rectangle
+          ( \fp_eval:n { #1 + 0.13 } cm , \fp_eval:n { #2 + 0.03 } cm ) ;
+        \exp_not:N \draw [ mriseq/break ]
+          ( \fp_eval:n { #1 - 0.14 } cm , \fp_eval:n { #2 } cm ) --
+          ( \fp_eval:n { #1 - 0.07 } cm , \fp_eval:n { #2 } cm ) --
+          ( \fp_eval:n { #1 - 0.03 } cm , \fp_eval:n { #2 + 0.09 } cm ) --
+          ( \fp_eval:n { #1 + 0.03 } cm , \fp_eval:n { #2 - 0.09 } cm ) --
+          ( \fp_eval:n { #1 + 0.07 } cm , \fp_eval:n { #2 } cm ) --
+          ( \fp_eval:n { #1 + 0.14 } cm , \fp_eval:n { #2 } cm ) ;
+      }
+  }
+\cs_new_protected:Npn \__mriseq_break_slash:nn #1#2
+  {
+    \__mriseq_exec:e
+      {
+        \exp_not:N \fill [ mriseq-bg ]
+          ( \fp_eval:n { #1 - 0.06 } cm , \fp_eval:n { #2 - 0.03 } cm ) rectangle
+          ( \fp_eval:n { #1 + 0.06 } cm , \fp_eval:n { #2 + 0.03 } cm ) ;
+        \exp_not:N \draw [ mriseq/break ]
+          ( \fp_eval:n { #1 - 0.11 } cm , \fp_eval:n { #2 - 0.12 } cm ) --
+          ( \fp_eval:n { #1 - 0.01 } cm , \fp_eval:n { #2 + 0.12 } cm )
+          ( \fp_eval:n { #1 + 0.01 } cm , \fp_eval:n { #2 - 0.12 } cm ) --
+          ( \fp_eval:n { #1 + 0.11 } cm , \fp_eval:n { #2 + 0.12 } cm ) ;
+      }
+  }
+
+% =========================================================================
+% 11. The environment and the user commands
+% =========================================================================
+\NewDocumentCommand \__mriseq_u_rf:w { O{rf} m }
+  { \__mriseq_push:nnn { rf } {#1} {#2} \ignorespaces }
+\NewDocumentCommand \__mriseq_u_grad:w { m m }
+  { \__mriseq_push:nnn { grad } {#1} {#2} \ignorespaces }
+\NewDocumentCommand \__mriseq_u_ptable:w { O{gy} m }
+  { \__mriseq_push:nnn { ptable } {#1} {#2} \ignorespaces }
+\NewDocumentCommand \__mriseq_u_adc:w { O{adc} m }
+  { \__mriseq_push:nnn { adc } {#1} {#2} \ignorespaces }
+\NewDocumentCommand \__mriseq_u_fid:w { O{sig} m }
+  { \__mriseq_push:nnn { fid } {#1} {#2} \ignorespaces }
+\NewDocumentCommand \__mriseq_u_echo:w { O{sig} m }
+  { \__mriseq_push:nnn { echo } {#1} {#2} \ignorespaces }
+\NewDocumentCommand \__mriseq_u_wave:w { m O{} m }
+  { \__mriseq_push:nnn { wave } {#1} { #2 , points = {#3} } \ignorespaces }
+\NewDocumentCommand \__mriseq_u_marker:w { O{} m }
+  { \__mriseq_push:nnn { marker } { } { at = {#2} , #1 } \ignorespaces }
+\NewDocumentCommand \__mriseq_u_interval:w { O{} m m m }
+  { \__mriseq_push:nnn { interval } { } { from = {#2} , to = {#3} , label = {#4} , #1 } \ignorespaces }
+\NewDocumentCommand \__mriseq_u_gap:w { m m }
+  { \__mriseq_push:nnn { gap } { } { from = {#1} , to = {#2} } \ignorespaces }
+\NewDocumentCommand \__mriseq_u_shade:w { O{} m m m }
+  { \__mriseq_push:nnn { shade } {#2} { from = {#3} , to = {#4} , #1 } \ignorespaces }
+\NewDocumentCommand \__mriseq_u_tikz:w { +m }
+  { \__mriseq_push:nnn { tikz } { } { code = {#1} } \ignorespaces }
+
+%  TikZ coordinate system  (seq cs: t=<time>, row=<row>, a=<amplitude>)
+\keys_define:nn { mriseq / cs }
+  {
+    t   .tl_set:N = \l__mriseq_cs_t_tl ,
+    row .tl_set:N = \l__mriseq_cs_row_tl ,
+    a   .tl_set:N = \l__mriseq_cs_a_tl ,
+    y   .tl_set:N = \l__mriseq_cs_y_tl ,
+  }
+\cs_new_protected:Npn \__mriseq_cs:n #1
+  {
+    \group_begin:
+      \tl_set:Nn \l__mriseq_cs_t_tl { 0 }
+      \tl_set:Nn \l__mriseq_cs_a_tl { 0 }
+      \tl_clear:N \l__mriseq_cs_row_tl
+      \tl_clear:N \l__mriseq_cs_y_tl
+      \keys_set:nn { mriseq / cs } {#1}
+      \tl_if_blank:VTF \l__mriseq_cs_row_tl
+        {
+          \tl_set:Nn \l__mriseq_cur_yb_tl { 0 }
+          \tl_set:Nn \l__mriseq_cur_sc_tl { 0 }
+          \tl_if_blank:VF \l__mriseq_cs_y_tl
+            {
+              \tl_set:Ne \l__mriseq_cur_yb_tl
+                { \dim_to_decimal_in_unit:nn { \l__mriseq_cs_y_tl } { 1cm } }
+            }
+        }
+        { \__mriseq_use_row:V \l__mriseq_cs_row_tl }
+      \tl_set:Ne \l__mriseq_tmp_tl
+        {
+          \exp_not:N \pgfpoint
+            { \__mriseq_x:n { \l__mriseq_cs_t_tl } cm }
+            { \__mriseq_y:n { \l__mriseq_cs_a_tl } cm }
+        }
+    \exp_args:NNNV \group_end:
+    \tl_set:Nn \l__mriseq_tmp_tl \l__mriseq_tmp_tl
+    \tl_use:N \l__mriseq_tmp_tl
+  }
+\tikzdeclarecoordinatesystem { seq } { \__mriseq_cs:n {#1} }
+
+\cs_new_protected:Npn \__mriseq_begin:n #1
+  {
+    \bool_if:NT \l__mriseq_inenv_bool { \msg_error:nn { mriseq } { nested } }
+    \bool_set_true:N \l__mriseq_inenv_bool
+    \__mriseq_set:n {#1}
+    % narrow diagrams (e.g. in subfigures) use the compact preset, unless
+    % auto compact = 0pt; the user's keys are applied again on top of it
+    \bool_lazy_and:nnT
+      { \dim_compare_p:nNn { \l__mriseq_autocompact_tl } > { 0pt } }
+      { \dim_compare_p:nNn { \l__mriseq_width_tl } < { \l__mriseq_autocompact_tl } }
+      {
+        \keys_set:nn { mriseq } { compact }
+        \__mriseq_set:n {#1}
+      }
+    \tl_gclear:N \g__mriseq_items_tl
+    \cs_set_eq:NN \rfpulse    \__mriseq_u_rf:w
+    \cs_set_eq:NN \gradient   \__mriseq_u_grad:w
+    \cs_set_eq:NN \phasetable \__mriseq_u_ptable:w
+    \cs_set_eq:NN \readout    \__mriseq_u_adc:w
+    \cs_set_eq:NN \fid        \__mriseq_u_fid:w
+    \cs_set_eq:NN \echo       \__mriseq_u_echo:w
+    \cs_set_eq:NN \waveform   \__mriseq_u_wave:w
+    \cs_set_eq:NN \marker     \__mriseq_u_marker:w
+    \cs_set_eq:NN \interval   \__mriseq_u_interval:w
+    \cs_set_eq:NN \gap        \__mriseq_u_gap:w
+    \cs_set_eq:NN \annotate   \__mriseq_u_tikz:w
+    \cs_set_eq:NN \shadearea  \__mriseq_u_shade:w
+    \cs_set_eq:NN \spinecho          \__mriseq_u_se:w
+    \cs_set_eq:NN \gradientecho      \__mriseq_u_gre:w
+    \cs_set_eq:NN \inversionrecovery \__mriseq_u_ir:w
+    \cs_set_eq:NN \epi               \__mriseq_u_epi:w
+    \cs_set_eq:NN \turbospinecho     \__mriseq_u_tse:w
+    \cs_set_eq:NN \diffusionspinecho \__mriseq_u_dwse:w
+    \cs_set_eq:NN \diffusionepi      \__mriseq_u_dwepi:w
+    \ignorespaces
+  }
+
+% =========================================================================
+% 10b. k-space: k(t) rows and a k-space trajectory panel
+% =========================================================================
+%  k(t) = gammabar * integral G dt  (gammabar in kHz/mT, G in mT/m, t in ms -> 1/m)
+%  An excitation pulse sets k to 0 at its centre, a refocusing (or inversion)
+%  pulse mirrors k -> -k at its centre.  Gradients on the rows gx, gy, gz give
+%  kx, ky, kz.  A phase-encoding table contributes its highlighted step
+%  (\texttt{highlight}) or, without one, its outermost step.
+\seq_new:N \g__mriseq_k_pieces_seq
+\seq_new:N \g__mriseq_k_times_seq
+\seq_new:N \g__mriseq_k_events_seq
+\seq_new:N \g__mriseq_k_adc_seq
+\seq_new:N \l__mriseq_k_t_seq
+\int_new:N \l__mriseq_k_n_int
+\fp_new:N \l__mriseq_k_max_fp
+\fp_new:N \g__mriseq_k_maxx_fp
+\fp_new:N \g__mriseq_k_maxy_fp
+\fp_new:N \g__mriseq_k_maxz_fp
+\tl_new:N \l__mriseq_kspace_tl
+\dim_new:N \l__mriseq_kspace_size_dim
+\dim_new:N \l__mriseq_kspace_gap_dim
+\tl_new:N \l__mriseq_kspace_title_tl
+\bool_new:N \l__mriseq_k_needed_bool
+\tl_new:N \g__mriseq_k_panel_tl     % list of segments  {kind}{t1}{t2}{kx1}{ky1}{kx2}{ky2}
+\keys_define:nn { mriseq }
+  {
+    kspace       .tl_set:N = \l__mriseq_kspace_tl ,
+    kspace       .initial:n = none ,
+    kspace       .default:n = right ,
+    kspace~size  .dim_set:N = \l__mriseq_kspace_size_dim ,
+    kspace~size  .initial:n = 3.6cm ,
+    kspace~gap   .dim_set:N = \l__mriseq_kspace_gap_dim ,
+    kspace~gap   .initial:n = 0.8cm ,
+    kspace~title .tl_set:N = \l__mriseq_kspace_title_tl ,
+    kspace~title .initial:n = {} ,
+    kspace~isotropic .bool_set:N = \l__mriseq_kspace_iso_bool ,
+    k~color      .code:n = \__mriseq_colorkey:nn { mriseq-k } {#1} ,
+  }
+\colorlet{mriseq-k}{mriseq-phase}
+
+\cs_new:Npn \__mriseq_kv:nn #1#2 { \cs:w l__mriseq_kv_#1_ \int_eval:n {#2} _tl \cs_end: }
+\cs_new_protected:Npn \__mriseq_kv_set:nnn #1#2#3
+  { \cs_set_nopar:cpe { l__mriseq_kv_#1_ \int_eval:n {#2} _tl } { \fp_eval:n {#3} } }
+\cs_generate_variant:Nn \__mriseq_kv_set:nnn { nen }
+
+\cs_new_protected:Npn \__mriseq_k_axis:nN #1#2
+  % row -> axis letter (or empty)
+  {
+    \str_case:nnF {#1}
+      { { gx } { \tl_set:Nn #2 { x } } { gy } { \tl_set:Nn #2 { y } } { gz } { \tl_set:Nn #2 { z } } }
+      { \tl_clear:N #2 }
+  }
+\cs_new_protected:Npn \__mriseq_k_addtime:n #1
+  { \seq_gput_right:Ne \g__mriseq_k_times_seq { \fp_eval:n {#1} } }
+
+%  collect gradients, RF events and ADC windows
+\cs_new_protected:Npn \__mriseq_k_collect:nnn #1#2#3
+  {
+    \group_begin:
+      \keys_set:nn { mriseq / el } {#3}
+      \str_case:nn {#1}
+        {
+          { grad }   { \__mriseq_k_collect_trap:nnn {#1} {#2} { 1 } }
+          { ptable }
+            {
+              \__mriseq_k_collect_trap:nnn {#1} {#2}
+                { \tl_if_blank:VTF \l__mriseq_el_highlight_tl { 1 } { \l__mriseq_el_highlight_tl } }
+            }
+          { wave }
+            {
+              \__mriseq_k_axis:nN {#2} \l__mriseq_tmp_tl
+              \tl_if_blank:VF \l__mriseq_tmp_tl
+                {
+                  \tl_clear:N \l__mriseq_path_tl
+                  \exp_args:NV \clist_map_inline:nn \l__mriseq_el_points_tl
+                    { \__mriseq_k_wavept:w ##1 \q_stop }
+                  \seq_gput_right:Ne \g__mriseq_k_pieces_seq
+                    { { \l__mriseq_tmp_tl } { \exp_not:V \l__mriseq_path_tl } }
+                }
+            }
+          { rf }
+            {
+              \__mriseq_compute:n { rf }
+              \tl_if_blank:VT \l__mriseq_el_role_tl
+                {
+                  \bool_lazy_and:nnTF
+                    { ! \tl_if_blank_p:V \l__mriseq_el_flip_tl }
+                    { \fp_compare_p:nNn { \l__mriseq_el_flip_tl } > { 135 } }
+                    { \tl_set:Nn \l__mriseq_el_role_tl { refocus } }
+                    { \tl_set:Nn \l__mriseq_el_role_tl { excite } }
+                }
+              \seq_gput_right:Ne \g__mriseq_k_events_seq
+                {
+                  { \fp_eval:n { \l__mriseq_c_fp } }
+                  { \str_if_eq:VnTF \l__mriseq_el_role_tl { excite } { 1 } { 2 } }
+                }
+              \__mriseq_k_addtime:n { \l__mriseq_c_fp }
+            }
+          { adc }
+            {
+              \__mriseq_compute:n { adc }
+              \seq_gput_right:Ne \g__mriseq_k_adc_seq
+                { { \fp_eval:n { \l__mriseq_s_fp } } { \fp_eval:n { \l__mriseq_e_fp } } }
+              \__mriseq_k_addtime:n { \l__mriseq_s_fp }
+              \__mriseq_k_addtime:n { \l__mriseq_e_fp }
+            }
+        }
+    \group_end:
+  }
+\cs_new_protected:Npn \__mriseq_k_wavept:w #1 / #2 \q_stop
+  {
+    \tl_put_right:Ne \l__mriseq_path_tl { { \fp_eval:n {#1} } { \fp_eval:n {#2} } }
+    \__mriseq_k_addtime:n {#1}
+  }
+\cs_new_protected:Npn \__mriseq_k_collect_trap:nnn #1#2#3
+  {
+    \__mriseq_k_axis:nN {#2} \l__mriseq_tmp_tl
+    \tl_if_blank:VF \l__mriseq_tmp_tl
+      {
+        \__mriseq_compute:n {#1}
+        \fp_set:Nn \l__mriseq_tmpa_fp { \l__mriseq_amp_fp * (#3) }
+        % corners plus points on the ramps (k is quadratic there)
+        \tl_clear:N \l__mriseq_path_tl
+        \int_step_inline:nnn { 0 } { \l__mriseq_k_sub_int }
+          {
+            \__mriseq_k_corner:nn
+              { \l__mriseq_s_fp + ##1 / \l__mriseq_k_sub_int * \l__mriseq_ru_fp }
+              { \l__mriseq_tmpa_fp * ##1 / \l__mriseq_k_sub_int }
+          }
+        \int_step_inline:nnn { 0 } { \l__mriseq_k_sub_int }
+          {
+            \__mriseq_k_corner:nn
+              { \l__mriseq_s_fp + \l__mriseq_ru_fp + \l__mriseq_flat_fp + ##1 / \l__mriseq_k_sub_int * \l__mriseq_rd_fp }
+              { \l__mriseq_tmpa_fp * ( 1 - ##1 / \l__mriseq_k_sub_int ) }
+          }
+        \seq_gput_right:Ne \g__mriseq_k_pieces_seq
+          { { \l__mriseq_tmp_tl } { \exp_not:V \l__mriseq_path_tl } }
+      }
+  }
+\int_new:N \l__mriseq_k_sub_int
+\int_set:Nn \l__mriseq_k_sub_int { 5 }
+\cs_new_protected:Npn \__mriseq_k_corner:nn #1#2
+  {
+    \tl_put_right:Ne \l__mriseq_path_tl { { \fp_eval:n {#1} } { \fp_eval:n {#2} } }
+    \__mriseq_k_addtime:n {#1}
+  }
+
+%  smallest index i with T_i >= #1 - eps  (binary search)  -> \l__mriseq_tmpa_int
+\int_new:N \l__mriseq_lo_int
+\int_new:N \l__mriseq_hi_int
+\int_new:N \l__mriseq_mid_int
+\cs_new_protected:Npn \__mriseq_k_lower:n #1
+  {
+    \int_set:Nn \l__mriseq_lo_int { 1 }
+    \int_set:Nn \l__mriseq_hi_int { \l__mriseq_k_n_int + 1 }
+    \fp_set:Nn \l__mriseq_tmpc_fp { #1 - 1e-7 }
+    \bool_do_while:nn { \int_compare_p:nNn \l__mriseq_lo_int < \l__mriseq_hi_int }
+      {
+        \int_set:Nn \l__mriseq_mid_int { \int_div_truncate:nn { \l__mriseq_lo_int + \l__mriseq_hi_int } { 2 } }
+        \fp_compare:nNnTF { \__mriseq_kv:nn { T } { \int_use:N \l__mriseq_mid_int } } < \l__mriseq_tmpc_fp
+          { \int_set:Nn \l__mriseq_lo_int { \l__mriseq_mid_int + 1 } }
+          { \int_set:Nn \l__mriseq_hi_int { \l__mriseq_mid_int } }
+      }
+  }
+
+%  add the piecewise-linear waveform #2 (list of {t}{g}) to axis #1
+\cs_new_protected:Npn \__mriseq_k_addpiece:nn #1#2
+  {
+    \tl_set:Nn \l__mriseq_path_tl {#2}
+    \int_set:Nn \l__mriseq_n_int { \tl_count:N \l__mriseq_path_tl / 2 }
+    \int_step_inline:nn { \l__mriseq_n_int - 1 }
+      {
+        \fp_set:Nn \l__mriseq_s_fp { \tl_item:Nn \l__mriseq_path_tl { 2 * ##1 - 1 } }
+        \fp_set:Nn \l__mriseq_amp_fp { \tl_item:Nn \l__mriseq_path_tl { 2 * ##1 } }
+        \fp_set:Nn \l__mriseq_e_fp { \tl_item:Nn \l__mriseq_path_tl { 2 * ##1 + 1 } }
+        \fp_set:Nn \l__mriseq_max_fp { \tl_item:Nn \l__mriseq_path_tl { 2 * ##1 + 2 } }
+        \fp_compare:nNnT { \l__mriseq_e_fp - \l__mriseq_s_fp } > { 1e-9 }
+          {
+            \__mriseq_k_lower:n { \l__mriseq_s_fp }
+            \int_set_eq:NN \l__mriseq_mid_int \l__mriseq_lo_int
+            \bool_do_while:nn
+              {
+                \int_compare_p:nNn \l__mriseq_mid_int < { \l__mriseq_k_n_int + 1 }
+                && \fp_compare_p:nNn { \__mriseq_kv:nn { T } { \int_use:N \l__mriseq_mid_int } }
+                                     < { \l__mriseq_e_fp - 1e-7 }
+              }
+              {
+                \__mriseq_kv_set:nen { G#1 } { \int_use:N \l__mriseq_mid_int }
+                  {
+                    \__mriseq_kv:nn { G#1 } { \int_use:N \l__mriseq_mid_int }
+                    + \l__mriseq_amp_fp + ( \l__mriseq_max_fp - \l__mriseq_amp_fp )
+                      * ( \__mriseq_kv:nn { T } { \int_use:N \l__mriseq_mid_int } - \l__mriseq_s_fp )
+                      / ( \l__mriseq_e_fp - \l__mriseq_s_fp )
+                  }
+                \int_incr:N \l__mriseq_mid_int
+              }
+          }
+      }
+  }
+
+\cs_new_protected:Npn \__mriseq_k_compute:
+  {
+    \seq_gclear:N \g__mriseq_k_pieces_seq
+    \seq_gclear:N \g__mriseq_k_times_seq
+    \seq_gclear:N \g__mriseq_k_events_seq
+    \seq_gclear:N \g__mriseq_k_adc_seq
+    \tl_gclear:N \g__mriseq_k_panel_tl
+    \cs_set_eq:NN \__mriseq_item:nnn \__mriseq_k_collect:nnn
+    \g__mriseq_items_tl
+    \group_begin:
+      % ---- sorted, unique time points
+      \seq_set_eq:NN \l__mriseq_k_t_seq \g__mriseq_k_times_seq
+      \seq_sort:Nn \l__mriseq_k_t_seq
+        { \fp_compare:nNnTF {##1} > {##2} { \sort_return_swapped: } { \sort_return_same: } }
+      \int_zero:N \l__mriseq_k_n_int
+      \fp_set:Nn \l__mriseq_tmpb_fp { -inf }
+      \seq_map_inline:Nn \l__mriseq_k_t_seq
+        {
+          \fp_compare:nNnT {##1} > { \l__mriseq_tmpb_fp + 1e-6 }
+            {
+              \int_incr:N \l__mriseq_k_n_int
+              \__mriseq_kv_set:nen { T } { \int_use:N \l__mriseq_k_n_int } {##1}
+              \__mriseq_kv_set:nen { Gx } { \int_use:N \l__mriseq_k_n_int } { 0 }
+              \__mriseq_kv_set:nen { Gy } { \int_use:N \l__mriseq_k_n_int } { 0 }
+              \__mriseq_kv_set:nen { Gz } { \int_use:N \l__mriseq_k_n_int } { 0 }
+              \__mriseq_kv_set:nen { E } { \int_use:N \l__mriseq_k_n_int } { 0 }
+              \fp_set:Nn \l__mriseq_tmpb_fp {##1}
+            }
+        }
+      % ---- gradient values at the time points
+      \seq_map_inline:Nn \g__mriseq_k_pieces_seq { \__mriseq_k_addpiece:nn ##1 }
+      % ---- RF events
+      \seq_map_inline:Nn \g__mriseq_k_events_seq { \__mriseq_k_event:nn ##1 }
+      % ---- integrate
+      \tl_clear:N \l__mriseq_q_mz_tl
+      \tl_set:Nn \l__mriseq_k_px_tl { }
+      \tl_set:Nn \l__mriseq_k_py_tl { }
+      \tl_set:Nn \l__mriseq_k_pz_tl { }
+      \fp_zero:N \l__mriseq_k_x_fp \fp_zero:N \l__mriseq_k_y_fp \fp_zero:N \l__mriseq_k_z_fp
+      \fp_gzero:N \g__mriseq_k_maxx_fp \fp_gzero:N \g__mriseq_k_maxy_fp \fp_gzero:N \g__mriseq_k_maxz_fp
+      \int_step_inline:nn { \l__mriseq_k_n_int }
+        {
+          \fp_set:Nn \l__mriseq_tmpa_fp { \__mriseq_kv:nn { T } {##1} }
+          \int_compare:nNnF {##1} = { 1 }
+            {
+              \fp_set:Nn \l__mriseq_tmpb_fp
+                { \c__mriseq_gamma_fp * ( \l__mriseq_tmpa_fp - \__mriseq_kv:nn { T } { ##1 - 1 } ) / 2 }
+              \fp_set:Nn \l__mriseq_k_ox_fp { \l__mriseq_k_x_fp }
+              \fp_set:Nn \l__mriseq_k_oy_fp { \l__mriseq_k_y_fp }
+              \fp_add:Nn \l__mriseq_k_x_fp
+                { \l__mriseq_tmpb_fp * ( \__mriseq_kv:nn { Gx } {##1} + \__mriseq_kv:nn { Gx } { ##1 - 1 } ) }
+              \fp_add:Nn \l__mriseq_k_y_fp
+                { \l__mriseq_tmpb_fp * ( \__mriseq_kv:nn { Gy } {##1} + \__mriseq_kv:nn { Gy } { ##1 - 1 } ) }
+              \fp_add:Nn \l__mriseq_k_z_fp
+                { \l__mriseq_tmpb_fp * ( \__mriseq_kv:nn { Gz } {##1} + \__mriseq_kv:nn { Gz } { ##1 - 1 } ) }
+              \__mriseq_k_segment:nnn { \__mriseq_kv:nn { T } { ##1 - 1 } } { \l__mriseq_tmpa_fp } { line }
+            }
+          \__mriseq_k_point:
+          \int_compare:nNnF { \__mriseq_kv:nn { E } {##1} } = { 0 }
+            {
+              \fp_set_eq:NN \l__mriseq_k_ox_fp \l__mriseq_k_x_fp
+              \fp_set_eq:NN \l__mriseq_k_oy_fp \l__mriseq_k_y_fp
+              \int_compare:nNnTF { \__mriseq_kv:nn { E } {##1} } = { 1 }
+                { \fp_zero:N \l__mriseq_k_x_fp \fp_zero:N \l__mriseq_k_y_fp \fp_zero:N \l__mriseq_k_z_fp }
+                {
+                  \fp_set:Nn \l__mriseq_k_x_fp { - \l__mriseq_k_x_fp }
+                  \fp_set:Nn \l__mriseq_k_y_fp { - \l__mriseq_k_y_fp }
+                  \fp_set:Nn \l__mriseq_k_z_fp { - \l__mriseq_k_z_fp }
+                }
+              \int_compare:nNnF { \__mriseq_kv:nn { E } {##1} } = { 1 }
+                { \__mriseq_k_segment:nnn { \l__mriseq_tmpa_fp } { \l__mriseq_tmpa_fp } { jump } }
+              \__mriseq_k_point:
+            }
+        }
+      % ---- k(t) rows as free waveforms
+      \clist_map_inline:nn { x , y , z }
+        {
+          \tl_if_blank:vF { l__mriseq_k_p##1_tl }
+            {
+              \__mriseq_push:nne { wave } { k##1 }
+                {
+                  filled = false , occupy = false , group = k##1 ,
+                  points = { \exp_not:v { l__mriseq_k_p##1_tl } }
+                }
+              \prop_gput:Nne \g__mriseq_max_prop { k##1 }
+                { \fp_eval:n { max( \use:c { g__mriseq_k_max##1_fp } , 1e-9 ) } }
+            }
+        }
+    \group_end:
+  }
+\fp_new:N \l__mriseq_k_x_fp
+\fp_new:N \l__mriseq_k_y_fp
+\fp_new:N \l__mriseq_k_z_fp
+\fp_new:N \l__mriseq_k_ox_fp
+\fp_new:N \l__mriseq_k_oy_fp
+\tl_new:N \l__mriseq_k_px_tl
+\tl_new:N \l__mriseq_k_py_tl
+\tl_new:N \l__mriseq_k_pz_tl
+\cs_generate_variant:Nn \prop_gput:Nnn { Nne }
+\cs_new_protected:Npn \__mriseq_k_event:nn #1#2
+  {
+    \__mriseq_k_lower:n {#1}
+    \int_compare:nNnT \l__mriseq_lo_int < { \l__mriseq_k_n_int + 1 }
+      { \__mriseq_kv_set:nen { E } { \int_use:N \l__mriseq_lo_int } {#2} }
+  }
+\cs_new_protected:Npn \__mriseq_k_point:
+  {
+    \tl_put_right:Ne \l__mriseq_k_px_tl
+      { \tl_if_blank:VF \l__mriseq_k_px_tl { , } \fp_eval:n { \l__mriseq_tmpa_fp } / \fp_eval:n { round( \l__mriseq_k_x_fp , 5 ) } }
+    \tl_put_right:Ne \l__mriseq_k_py_tl
+      { \tl_if_blank:VF \l__mriseq_k_py_tl { , } \fp_eval:n { \l__mriseq_tmpa_fp } / \fp_eval:n { round( \l__mriseq_k_y_fp , 5 ) } }
+    \tl_put_right:Ne \l__mriseq_k_pz_tl
+      { \tl_if_blank:VF \l__mriseq_k_pz_tl { , } \fp_eval:n { \l__mriseq_tmpa_fp } / \fp_eval:n { round( \l__mriseq_k_z_fp , 5 ) } }
+    \fp_gset:Nn \g__mriseq_k_maxx_fp { max( \g__mriseq_k_maxx_fp , abs( \l__mriseq_k_x_fp ) ) }
+    \fp_gset:Nn \g__mriseq_k_maxy_fp { max( \g__mriseq_k_maxy_fp , abs( \l__mriseq_k_y_fp ) ) }
+    \fp_gset:Nn \g__mriseq_k_maxz_fp { max( \g__mriseq_k_maxz_fp , abs( \l__mriseq_k_z_fp ) ) }
+  }
+%  remember a segment of the 2-D trajectory (#1, #2 times; #3 line or jump)
+\cs_new_protected:Npn \__mriseq_k_segment:nnn #1#2#3
+  {
+    \tl_set:Nn \l__mriseq_type_tl {#3}
+    \str_if_eq:nnT {#3} { line }
+      {
+        \fp_set:Nn \l__mriseq_tmpc_fp { ( (#1) + (#2) ) / 2 }
+        \seq_map_inline:Nn \g__mriseq_k_adc_seq
+          {
+            \fp_compare:nT { \use_i:nn ##1 - 1e-7 < \l__mriseq_tmpc_fp < \use_ii:nn ##1 + 1e-7 }
+              { \tl_set:Nn \l__mriseq_type_tl { adc } \seq_map_break: }
+          }
+      }
+    \bool_lazy_or:nnT
+      { ! \fp_compare_p:nNn { abs( \l__mriseq_k_x_fp - \l__mriseq_k_ox_fp ) } < { 1e-9 } }
+      { ! \fp_compare_p:nNn { abs( \l__mriseq_k_y_fp - \l__mriseq_k_oy_fp ) } < { 1e-9 } }
+      {
+        \tl_gput_right:Ne \g__mriseq_k_panel_tl
+          {
+            {
+              { \l__mriseq_type_tl } { \fp_eval:n {#1} } { \fp_eval:n {#2} }
+              { \fp_eval:n { \l__mriseq_k_ox_fp } } { \fp_eval:n { \l__mriseq_k_oy_fp } }
+              { \fp_eval:n { \l__mriseq_k_x_fp } } { \fp_eval:n { \l__mriseq_k_y_fp } }
+            }
+          }
+      }
+  }
+
+%  ---- the k-space panel -----------------------------------------------------
+\fp_new:N \l__mriseq_kp_x_fp
+\fp_new:N \l__mriseq_kp_y_fp
+\fp_new:N \l__mriseq_kp_s_fp
+\fp_new:N \l__mriseq_kp_m_fp
+\fp_new:N \l__mriseq_kp_my_fp
+\tl_new:N \l__mriseq_kp_line_tl
+\tl_new:N \l__mriseq_kp_adc_tl
+\tl_new:N \l__mriseq_kp_jump_tl
+\tl_new:N \l__mriseq_kp_last_tl
+\fp_new:N \l__mriseq_kp_lastt_fp
+\cs_new_protected:Npn \__mriseq_kp_geometry:
+  {
+    \fp_set:Nn \l__mriseq_kp_s_fp
+      { \dim_to_decimal_in_unit:nn { \l__mriseq_kspace_size_dim } { 1cm } }
+    \str_if_eq:VnTF \l__mriseq_kspace_tl { left }
+      {
+        \fp_set:Nn \l__mriseq_kp_x_fp
+          { \l__mriseq_xlab_fp - \dim_to_decimal_in_unit:nn { \l__mriseq_kspace_gap_dim } { 1cm }
+            - \l__mriseq_kp_s_fp / 2 }
+      }
+      {
+        \fp_set:Nn \l__mriseq_kp_x_fp
+          { \l__mriseq_width_fp + \dim_to_decimal_in_unit:nn { \l__mriseq_kspace_gap_dim } { 1cm }
+            + \l__mriseq_kp_s_fp / 2 }
+      }
+    \fp_set:Nn \l__mriseq_kp_y_fp { \l__mriseq_ybot_fp / 2 }
+    \str_if_eq:VnT \l__mriseq_kspace_tl { below }
+      {
+        \fp_set:Nn \l__mriseq_kp_x_fp { \l__mriseq_width_fp / 2 }
+        \fp_set:Nn \l__mriseq_kp_y_fp
+          {
+            \l__mriseq_yaxis_fp
+            - \bool_if:NTF \l__mriseq_ticks_bool { 0.45 } { \bool_if:NTF \l__mriseq_axis_bool { 0.35 } { 0 } }
+            - \g__mriseq_botlevels_int * \dim_to_decimal_in_unit:nn { \l__mriseq_intervalsep_dim } { 1cm }
+            - \dim_to_decimal_in_unit:nn { \l__mriseq_kspace_gap_dim } { 1cm }
+            - \tl_if_blank:VTF \l__mriseq_kspace_title_tl { 0 } { 0.35 }
+            - \l__mriseq_kp_s_fp / 2
+          }
+      }
+    \fp_set:Nn \l__mriseq_kp_m_fp { max( \g__mriseq_k_maxx_fp , 1e-9 ) }
+    \fp_set:Nn \l__mriseq_kp_my_fp { max( \g__mriseq_k_maxy_fp , 1e-9 ) }
+    \bool_if:NT \l__mriseq_kspace_iso_bool
+      {
+        \fp_set:Nn \l__mriseq_kp_m_fp { max( \l__mriseq_kp_m_fp , \l__mriseq_kp_my_fp ) }
+        \fp_set_eq:NN \l__mriseq_kp_my_fp \l__mriseq_kp_m_fp
+      }
+  }
+\cs_new:Npn \__mriseq_kp_pt:nn #1#2
+  {
+    ( \fp_eval:n { round( \l__mriseq_kp_x_fp + (#1) / \l__mriseq_kp_m_fp * 0.42 * \l__mriseq_kp_s_fp , 4 ) } cm ,
+      \fp_eval:n { round( \l__mriseq_kp_y_fp + (#2) / \l__mriseq_kp_my_fp * 0.43 * \l__mriseq_kp_s_fp , 4 ) } cm )
+  }
+\cs_new_protected:Npn \__mriseq_draw_kspace:
+  {
+    \str_if_eq:VnF \l__mriseq_kspace_tl { none }
+      {
+        \__mriseq_kp_geometry:
+        \tl_clear:N \l__mriseq_kp_line_tl
+        \tl_clear:N \l__mriseq_kp_adc_tl
+        \tl_clear:N \l__mriseq_kp_jump_tl
+        \tl_clear:N \l__mriseq_kp_last_tl
+        \tl_map_tokens:Nn \g__mriseq_k_panel_tl { \__mriseq_kp_segment:n }
+        \fp_set:Nn \l__mriseq_tmpa_fp { 0.5 * \l__mriseq_kp_s_fp }
+        \__mriseq_exec:e
+          {
+            % centre axes, trajectory, frame, labels
+            \exp_not:N \draw [ mriseq/kspace~axes ]
+              ( \fp_eval:n { \l__mriseq_kp_x_fp - \l__mriseq_tmpa_fp } cm , \fp_eval:n { \l__mriseq_kp_y_fp } cm ) --
+              ( \fp_eval:n { \l__mriseq_kp_x_fp + \l__mriseq_tmpa_fp } cm , \fp_eval:n { \l__mriseq_kp_y_fp } cm )
+              ( \fp_eval:n { \l__mriseq_kp_x_fp } cm , \fp_eval:n { \l__mriseq_kp_y_fp - \l__mriseq_tmpa_fp } cm ) --
+              ( \fp_eval:n { \l__mriseq_kp_x_fp } cm , \fp_eval:n { \l__mriseq_kp_y_fp + \l__mriseq_tmpa_fp } cm ) ;
+            \tl_if_blank:VF \l__mriseq_kp_jump_tl
+              { \exp_not:N \draw [ mriseq/kspace~jump ] \exp_not:V \l__mriseq_kp_jump_tl ; }
+            \tl_if_blank:VF \l__mriseq_kp_line_tl
+              { \exp_not:N \draw [ mriseq/kspace~path ] \exp_not:V \l__mriseq_kp_line_tl ; }
+            \tl_if_blank:VF \l__mriseq_kp_adc_tl
+              { \exp_not:N \draw [ mriseq/kspace~adc ] \exp_not:V \l__mriseq_kp_adc_tl ; }
+            \exp_not:N \fill [ mriseq/kspace~origin ] \__mriseq_kp_pt:nn { 0 } { 0 } circle [ radius = 1.1pt ] ;
+            \exp_not:N \draw [ mriseq/kspace~frame ]
+              ( \fp_eval:n { \l__mriseq_kp_x_fp - \l__mriseq_tmpa_fp } cm , \fp_eval:n { \l__mriseq_kp_y_fp - \l__mriseq_tmpa_fp } cm )
+              rectangle
+              ( \fp_eval:n { \l__mriseq_kp_x_fp + \l__mriseq_tmpa_fp } cm , \fp_eval:n { \l__mriseq_kp_y_fp + \l__mriseq_tmpa_fp } cm ) ;
+            \exp_not:N \node [ mriseq/kspace~label , anchor = north ]
+              at ( \fp_eval:n { \l__mriseq_kp_x_fp } cm , \fp_eval:n { \l__mriseq_kp_y_fp - \l__mriseq_tmpa_fp } cm )
+              { \exp_not:N \ensuremath { k \c_math_subscript_token x } } ;
+            \exp_not:N \node [ mriseq/kspace~label , anchor = east ]
+              at ( \fp_eval:n { \l__mriseq_kp_x_fp - \l__mriseq_tmpa_fp } cm , \fp_eval:n { \l__mriseq_kp_y_fp } cm )
+              { \exp_not:N \ensuremath { k \c_math_subscript_token y } } ;
+            \tl_if_blank:VF \l__mriseq_kspace_title_tl
+              {
+                \exp_not:N \node [ mriseq/kspace~title , anchor = south ]
+                  at ( \fp_eval:n { \l__mriseq_kp_x_fp } cm , \fp_eval:n { \l__mriseq_kp_y_fp + \l__mriseq_tmpa_fp } cm )
+                  { \exp_not:V \l__mriseq_kspace_title_tl } ;
+              }
+          }
+      }
+  }
+\cs_new_protected:Npn \__mriseq_kp_segment:n #1 { \__mriseq_kp_segment:nnnnnnn #1 }
+\cs_new_protected:Npn \__mriseq_kp_segment:nnnnnnn #1#2#3#4#5#6#7
+  {
+    % only the part of the trajectory inside the time window
+    \bool_lazy_and:nnT
+      { \fp_compare_p:nNn {#2} > { \l__mriseq_tmin_fp - 1e-7 } }
+      { \fp_compare_p:nNn {#3} < { \l__mriseq_tmax_fp + 1e-7 } }
+      {
+        \bool_lazy_and:nnTF
+          { \str_if_eq_p:Vn \l__mriseq_kp_last_tl {#1} }
+          { \fp_compare_p:nNn { abs( \l__mriseq_kp_lastt_fp - (#2) ) } < { 1e-6 } }
+          { \tl_put_right:ce { l__mriseq_kp_#1_tl } { -- \__mriseq_kp_pt:nn {#6} {#7} } }
+          { \tl_put_right:ce { l__mriseq_kp_#1_tl } { \__mriseq_kp_pt:nn {#4} {#5} -- \__mriseq_kp_pt:nn {#6} {#7} } }
+        \tl_set:Nn \l__mriseq_kp_last_tl {#1}
+        \fp_set:Nn \l__mriseq_kp_lastt_fp {#3}
+      }
+  }
+
+\cs_new_protected:Npn \__mriseq_end:
+  {
+    \unskip
+    % everything (also the computation) happens inside the picture, so that
+    % TikZ externalisation can skip it for cached figures
+    \__mriseq_exec:e
+      { \exp_not:N \begin{tikzpicture} [ \exp_not:V \l__mriseq_tikz_tl ] }
+
+    % ---- measure
+    \bool_gset_false:N \g__mriseq_any_bool
+    \bool_gset_false:N \g__mriseq_markerlabel_bool
+    \int_gzero:N \g__mriseq_toplevels_int
+    \int_gzero:N \g__mriseq_botlevels_int
+    \fp_gset:Nn \g__mriseq_tfirst_fp { inf }
+    \fp_gset:Nn \g__mriseq_tlast_fp { -inf }
+    \prop_gclear:N \g__mriseq_max_prop
+    \seq_gclear:N \g__mriseq_occ_seq
+    \seq_gclear:N \g__mriseq_gaps_seq
+    \cs_set_eq:NN \__mriseq_item:nnn \__mriseq_measure_item:nnn
+    \g__mriseq_items_tl
+    \bool_if:NF \l__mriseq_markers_bool { \bool_gset_false:N \g__mriseq_markerlabel_bool }
+    % ---- k-space
+    \bool_set:Nn \l__mriseq_k_needed_bool
+      { ! \str_if_eq_p:Vn \l__mriseq_kspace_tl { none } }
+    \clist_map_inline:nn { kx , ky , kz }
+      {
+        \clist_if_in:NnT \l__mriseq_rows_clist {##1}
+          { \bool_set_true:N \l__mriseq_k_needed_bool }
+      }
+    \bool_if:NT \l__mriseq_k_needed_bool { \__mriseq_k_compute: }
+    % ---- layout
+    \__mriseq_layout:
+    % ---- draw
+
+      % Make the bounding box independent of the clip area
+      \__mriseq_exec:e
+        {
+          \exp_not:N \path [ use~as~bounding~box ]
+            ( \fp_eval:n
+                {
+                  \l__mriseq_xlab_fp
+                  - \str_if_eq:VnTF \l__mriseq_kspace_tl { left }
+                      { \dim_to_decimal_in_unit:nn { \l__mriseq_kspace_size_dim + \l__mriseq_kspace_gap_dim } { 1cm } + 0.45 }
+                      { 0 }
+                } cm ,
+              \fp_eval:n
+                {
+                  max( \l__mriseq_header_fp ,
+                       \bool_lazy_or:nnTF
+                         { \str_if_eq_p:Vn \l__mriseq_kspace_tl { none } }
+                         { \str_if_eq_p:Vn \l__mriseq_kspace_tl { below } } { 0 }
+                         { \l__mriseq_ybot_fp / 2
+                           + \dim_to_decimal_in_unit:nn { \l__mriseq_kspace_size_dim } { 1cm } / 2
+                           + \tl_if_blank:VTF \l__mriseq_kspace_title_tl { 0.05 } { 0.4 } } )
+                } cm ) rectangle
+            ( \fp_eval:n
+                {
+                  \l__mriseq_width_fp
+                  + \str_if_eq:VnTF \l__mriseq_kspace_tl { right }
+                      { \dim_to_decimal_in_unit:nn { \l__mriseq_kspace_size_dim + \l__mriseq_kspace_gap_dim } { 1cm } }
+                      { 0 }
+                } cm ,
+              \fp_eval:n
+                {
+                  min(
+                    \l__mriseq_yaxis_fp
+                    - \bool_if:NTF \l__mriseq_ticks_bool { 0.45 } { \bool_if:NTF \l__mriseq_axis_bool { 0.35 } { 0 } }
+                    - \g__mriseq_botlevels_int * \dim_to_decimal_in_unit:nn { \l__mriseq_intervalsep_dim } { 1cm } ,
+                    \str_case:VnF \l__mriseq_kspace_tl
+                      {
+                        { none } { 0 }
+                        { below }
+                          {
+                            \l__mriseq_yaxis_fp
+                            - \bool_if:NTF \l__mriseq_ticks_bool { 0.45 } { \bool_if:NTF \l__mriseq_axis_bool { 0.35 } { 0 } }
+                            - \g__mriseq_botlevels_int * \dim_to_decimal_in_unit:nn { \l__mriseq_intervalsep_dim } { 1cm }
+                            - \dim_to_decimal_in_unit:nn { \l__mriseq_kspace_gap_dim + \l__mriseq_kspace_size_dim } { 1cm }
+                            - \tl_if_blank:VTF \l__mriseq_kspace_title_tl { 0 } { 0.35 } - 0.4
+                          }
+                      }
+                      { \l__mriseq_ybot_fp / 2
+                        - \dim_to_decimal_in_unit:nn { \l__mriseq_kspace_size_dim } { 1cm } / 2 - 0.4 } )
+                } cm ) ;
+        }
+      \__mriseq_draw_background:
+      \begin{scope}
+        \__mriseq_exec:e
+          {
+            \exp_not:N \clip
+              ( 0cm , \fp_eval:n { \l__mriseq_header_fp + 0.6 } cm ) rectangle
+              ( \fp_eval:n { \l__mriseq_width_fp } cm , \fp_eval:n { \l__mriseq_ybot_fp - 3 } cm ) ;
+          }
+        \tl_set:Nn \l__mriseq_mode_tl { lines }
+        \cs_set_eq:NN \__mriseq_item:nnn \__mriseq_draw_markers:nnn
+        \g__mriseq_items_tl
+        \seq_gclear:N \g__mriseq_labbox_seq
+        \seq_gclear:N \g__mriseq_obst_seq
+        \bool_lazy_and:nnT { \l__mriseq_avoid_bool }
+          { \bool_lazy_any_p:n { { \l__mriseq_amplabels_bool } { \l__mriseq_arealabels_bool } { \l__mriseq_adclabels_bool } } }
+          {
+            \int_gzero:N \g__mriseq_idx_int
+            \cs_set_eq:NN \__mriseq_item:nnn \__mriseq_obst_item:nnn
+            \g__mriseq_items_tl
+          }
+        \int_gzero:N \g__mriseq_idx_int
+        \cs_set_eq:NN \__mriseq_item:nnn \__mriseq_draw_item:nnn
+        \g__mriseq_items_tl
+        \int_gset:Nn \g__mriseq_idx_int { -1 }
+        \__mriseq_draw_breaks:
+        \cs_set_eq:NN \__mriseq_item:nnn \__mriseq_draw_annot:nnn
+        \g__mriseq_items_tl
+      \end{scope}
+      % marker labels are not clipped
+      \tl_set:Nn \l__mriseq_mode_tl { labels }
+      \cs_set_eq:NN \__mriseq_item:nnn \__mriseq_draw_markers:nnn
+      \g__mriseq_items_tl
+      \__mriseq_draw_axis:
+      \__mriseq_draw_kspace:
+    \end{tikzpicture}
+  }
+
+\NewDocumentEnvironment { mriseq } { O{} }
+  { \__mriseq_begin:n {#1} }
+  { \__mriseq_end: }
+
+% =========================================================================
+% 12. Ready-made sequences
+% =========================================================================
+\tl_new:N \l__mriseq_p_te_tl
+\tl_new:N \l__mriseq_p_tr_tl
+\tl_new:N \l__mriseq_p_ti_tl
+\tl_new:N \l__mriseq_p_flip_tl
+\tl_new:N \l__mriseq_p_fliplabel_tl
+\tl_new:N \l__mriseq_p_readout_tl
+\tl_new:N \l__mriseq_p_echolabel_tl
+\tl_new:N \l__mriseq_p_telabel_tl
+\tl_new:N \l__mriseq_p_trlabel_tl
+\tl_new:N \l__mriseq_p_tilabel_tl
+\tl_new:N \l__mriseq_p_tehalflabel_tl
+\tl_new:N \l__mriseq_p_refphase_tl
+\tl_new:N \l__mriseq_p_excphase_tl
+\clist_new:N \l__mriseq_p_annotate_clist
+\fp_new:N \l__mriseq_p_rfdur_fp
+\fp_new:N \l__mriseq_p_refdur_fp
+\fp_new:N \l__mriseq_p_invdur_fp
+\fp_new:N \l__mriseq_p_tbw_fp
+\fp_new:N \l__mriseq_p_slice_fp
+\fp_new:N \l__mriseq_p_fov_fp
+\fp_new:N \l__mriseq_p_nread_fp
+\fp_new:N \l__mriseq_p_nphase_fp
+\fp_new:N \l__mriseq_p_dwell_fp
+\fp_new:N \l__mriseq_p_ramp_fp
+\fp_new:N \l__mriseq_p_prep_fp
+\fp_new:N \l__mriseq_p_lead_fp
+\fp_new:N \l__mriseq_p_tone_fp
+\fp_new:N \l__mriseq_p_ttwo_fp
+\fp_new:N \l__mriseq_p_ttwostar_fp
+\fp_new:N \l__mriseq_p_crushdur_fp
+\fp_new:N \l__mriseq_p_spoildur_fp
+\fp_new:N \l__mriseq_p_fidtwo_fp
+\tl_new:N \l__mriseq_p_lines_tl
+\tl_new:N \l__mriseq_p_highlight_tl
+\bool_new:N \l__mriseq_p_crushers_bool
+\bool_new:N \l__mriseq_p_spoiler_bool
+\bool_new:N \l__mriseq_p_invspoiler_bool
+\bool_new:N \l__mriseq_p_rewinder_bool
+\bool_new:N \l__mriseq_p_showtr_bool
+\bool_new:N \l__mriseq_p_pmarkers_bool
+\bool_new:N \l__mriseq_p_emarker_bool
+\bool_new:N \l__mriseq_p_signal_bool
+\bool_new:N \l__mriseq_p_mz_bool
+\bool_new:N \l__mriseq_p_equal_bool
+%  shade the pairs of equal gradient areas (slice rephasing, read prephasing)
+\cs_new_protected:Npn \__mriseq_q_equal_areas:
+  {
+    \bool_lazy_and:nnT { \l__mriseq_p_equal_bool } { \int_compare_p:nNn \l__mriseq_q_rep_int = { 0 } }
+      {
+        \__mriseq_push:nne { shade } { gz }
+          { from = \__mriseq_f:n { \l__mriseq_q_t_fp } ,
+            to = \__mriseq_f:n { \l__mriseq_q_t_fp + \l__mriseq_p_rfdur_fp / 2 + \l__mriseq_p_ramp_fp } , style = A }
+        \__mriseq_push:nne { shade } { gz }
+          { from = \__mriseq_f:n { \l__mriseq_q_p_fp } , to = \__mriseq_f:n { \l__mriseq_q_p_fp + \l__mriseq_p_prep_fp } ,
+            style = A }
+        \__mriseq_push:nne { shade } { gx }
+          { from = \__mriseq_f:n { \l__mriseq_q_p_fp } , to = \__mriseq_f:n { \l__mriseq_q_p_fp + \l__mriseq_p_prep_fp } ,
+            style = B }
+        \__mriseq_push:nne { shade } { gx }
+          { from = \__mriseq_f:n { \l__mriseq_q_techo_fp - \l__mriseq_q_tacq_fp / 2 - \l__mriseq_p_ramp_fp } ,
+            to = \__mriseq_f:n { \l__mriseq_q_techo_fp } , style = B }
+      }
+  }
+
+\keys_define:nn { mriseq / seq }
+  {
+    TE          .tl_set:N = \l__mriseq_p_te_tl ,
+    TE          .initial:n = auto ,
+    TR          .tl_set:N = \l__mriseq_p_tr_tl ,
+    TR          .initial:n = 500 ,
+    TI          .tl_set:N = \l__mriseq_p_ti_tl ,
+    TI          .initial:n = 400 ,
+    flip        .tl_set:N = \l__mriseq_p_flip_tl ,
+    flip~label  .tl_set:N = \l__mriseq_p_fliplabel_tl ,
+    excitation~phase .tl_set:N = \l__mriseq_p_excphase_tl ,
+    refocusing~phase .tl_set:N = \l__mriseq_p_refphase_tl ,
+    readout     .tl_set:N = \l__mriseq_p_readout_tl ,
+    readout     .initial:n = se ,
+    pulse~dur   .fp_set:N = \l__mriseq_p_rfdur_fp ,
+    pulse~dur   .initial:n = 2 ,
+    refocusing~dur .fp_set:N = \l__mriseq_p_refdur_fp ,
+    refocusing~dur .initial:n = 2 ,
+    inversion~dur  .fp_set:N = \l__mriseq_p_invdur_fp ,
+    inversion~dur  .initial:n = 2 ,
+    pulse~tbw   .fp_set:N = \l__mriseq_p_tbw_fp ,
+    pulse~tbw   .initial:n = 4 ,
+    slice       .fp_set:N = \l__mriseq_p_slice_fp ,
+    slice       .initial:n = 5 ,
+    fov         .fp_set:N = \l__mriseq_p_fov_fp ,
+    fov         .initial:n = 240 ,
+    matrix      .code:n = \fp_set:Nn \l__mriseq_p_nread_fp {#1}
+                          \fp_set:Nn \l__mriseq_p_nphase_fp {#1} ,
+    matrix      .initial:n = 64 ,
+    read~points .fp_set:N = \l__mriseq_p_nread_fp ,
+    phase~steps .fp_set:N = \l__mriseq_p_nphase_fp ,
+    dwell       .fp_set:N = \l__mriseq_p_dwell_fp ,
+    dwell       .initial:n = 0.05 ,
+    grad~ramp   .fp_set:N = \l__mriseq_p_ramp_fp ,
+    grad~ramp   .initial:n = 0.2 ,
+    prephaser~dur .fp_set:N = \l__mriseq_p_prep_fp ,
+    prephaser~dur .initial:n = 1 ,
+    lead        .fp_set:N = \l__mriseq_p_lead_fp ,
+    lead        .initial:n = 0.5 ,
+    T1          .fp_set:N = \l__mriseq_p_tone_fp ,
+    T1          .initial:n = 900 ,
+    T2          .fp_set:N = \l__mriseq_p_ttwo_fp ,
+    T2          .initial:n = 90 ,
+    T2*         .fp_set:N = \l__mriseq_p_ttwostar_fp ,
+    T2*         .initial:n = 40 ,
+    T2star      .fp_set:N = \l__mriseq_p_ttwostar_fp ,
+    fid~decay   .fp_set:N = \l__mriseq_p_fidtwo_fp ,
+    fid~decay   .initial:n = 0.7 ,
+    phase~lines .tl_set:N = \l__mriseq_p_lines_tl ,
+    phase~lines .initial:n = 9 ,
+    phase~highlight .tl_set:N = \l__mriseq_p_highlight_tl ,
+    crushers    .bool_set:N = \l__mriseq_p_crushers_bool ,
+    crusher~dur .fp_set:N = \l__mriseq_p_crushdur_fp ,
+    crusher~dur .initial:n = 0.8 ,
+    spoiler     .bool_set:N = \l__mriseq_p_spoiler_bool ,
+    inversion~spoiler .bool_set:N = \l__mriseq_p_invspoiler_bool ,
+    inversion~spoiler .initial:n = true ,
+    spoiler~dur .fp_set:N = \l__mriseq_p_spoildur_fp ,
+    spoiler~dur .initial:n = 1.4 ,
+    rewinder    .bool_set:N = \l__mriseq_p_rewinder_bool ,
+    show~TR     .bool_set:N = \l__mriseq_p_showtr_bool ,
+    annotate    .clist_set:N = \l__mriseq_p_annotate_clist ,
+    equal~areas .bool_set:N = \l__mriseq_p_equal_bool ,
+    pulse~markers .bool_set:N = \l__mriseq_p_pmarkers_bool ,
+    pulse~markers .initial:n = true ,
+    echo~marker .bool_set:N = \l__mriseq_p_emarker_bool ,
+    echo~marker .initial:n = true ,
+    echo~label  .tl_set:N = \l__mriseq_p_echolabel_tl ,
+    TE~label    .tl_set:N = \l__mriseq_p_telabel_tl ,
+    TE~label    .initial:n = TE ,
+    TE/2~label  .tl_set:N = \l__mriseq_p_tehalflabel_tl ,
+    TE/2~label  .initial:n = TE/2 ,
+    TR~label    .tl_set:N = \l__mriseq_p_trlabel_tl ,
+    TR~label    .initial:n = TR ,
+    TI~label    .tl_set:N = \l__mriseq_p_tilabel_tl ,
+    TI~label    .initial:n = TI ,
+  }
+
+\fp_new:N \l__mriseq_q_gss_fp     % slice-select amplitude (excitation)
+\fp_new:N \l__mriseq_q_gref_fp    % slice-select amplitude (refocusing)
+\fp_new:N \l__mriseq_q_ginv_fp    % slice-select amplitude (inversion)
+\fp_new:N \l__mriseq_q_gro_fp     % readout amplitude
+\fp_new:N \l__mriseq_q_tacq_fp    % acquisition window
+\fp_new:N \l__mriseq_q_ape_fp     % max. phase-encoding area
+\fp_new:N \l__mriseq_q_te_fp
+\fp_new:N \l__mriseq_q_temin_fp
+\fp_new:N \l__mriseq_q_t_fp       % excitation centre
+\fp_new:N \l__mriseq_q_tref_fp
+\fp_new:N \l__mriseq_q_tinv_fp
+\fp_new:N \l__mriseq_q_techo_fp
+\fp_new:N \l__mriseq_q_p_fp       % start of the prephasing window
+\fp_new:N \l__mriseq_q_sig_fp     % signal scaling
+\fp_new:N \l__mriseq_q_x_fp
+\fp_new:N \l__mriseq_q_end_fp
+\tl_new:N \l__mriseq_q_mz_tl
+\int_new:N \l__mriseq_q_level_int
+
+\cs_new_protected:Npn \__mriseq_q_common:
+  {
+    \fp_set:Nn \l__mriseq_q_gss_fp
+      { \l__mriseq_p_tbw_fp / \l__mriseq_p_rfdur_fp * 1000 / ( \c__mriseq_gamma_fp * \l__mriseq_p_slice_fp ) }
+    \fp_set:Nn \l__mriseq_q_gref_fp
+      { \l__mriseq_p_tbw_fp / \l__mriseq_p_refdur_fp * 1000 / ( \c__mriseq_gamma_fp * \l__mriseq_p_slice_fp ) }
+    \fp_set:Nn \l__mriseq_q_ginv_fp
+      { \l__mriseq_p_tbw_fp / \l__mriseq_p_invdur_fp * 1000 / ( \c__mriseq_gamma_fp * \l__mriseq_p_slice_fp ) }
+    \fp_set:Nn \l__mriseq_q_gro_fp
+      { 1 / \l__mriseq_p_dwell_fp * 1000 / ( \c__mriseq_gamma_fp * \l__mriseq_p_fov_fp ) }
+    \fp_set:Nn \l__mriseq_q_tacq_fp { \l__mriseq_p_nread_fp * \l__mriseq_p_dwell_fp }
+    \fp_set:Nn \l__mriseq_q_ape_fp
+      { \l__mriseq_p_nphase_fp / 2 * 1000 / ( \c__mriseq_gamma_fp * \l__mriseq_p_fov_fp ) }
+    \fp_set:Nn \l__mriseq_q_sig_fp { 1 }
+  }
+
+%  resolve TE from the minimum value #1 (an fp expression)
+\cs_new_protected:Npn \__mriseq_q_resolve_te:n #1
+  {
+    \fp_set:Nn \l__mriseq_q_temin_fp {#1}
+    \str_if_eq:VnTF \l__mriseq_p_te_tl { auto }
+      { \fp_set:Nn \l__mriseq_q_te_fp { ceil( \l__mriseq_q_temin_fp - 1e-6 ) } }
+      {
+        \fp_set:Nn \l__mriseq_q_te_fp { \l__mriseq_p_te_tl }
+        \bool_lazy_and:nnT
+          { \int_compare_p:nNn \l__mriseq_q_rep_int = { 0 } }
+          { \fp_compare_p:nNn { \l__mriseq_q_te_fp } < { \l__mriseq_q_temin_fp - 1e-6 } }
+          {
+            \msg_warning:nneee { mriseq } { te-too-short } { TE }
+              { \fp_eval:n { \l__mriseq_q_te_fp } }
+              { \fp_eval:n { round( \l__mriseq_q_temin_fp , 2 ) } }
+          }
+      }
+  }
+\cs_generate_variant:Nn \msg_warning:nnnnn { nneee }
+
+%  emit helpers ------------------------------------------------------------
+\cs_new:Npn \__mriseq_f:n #1 { \fp_eval:n { round( #1 , 6 ) } }
+
+\cs_new_protected:Npn \__mriseq_q_slice_grad:nnn #1#2#3
+  % centre, flat, amp
+  {
+    \__mriseq_push:nne { grad } { gz }
+      { center = \__mriseq_f:n {#1} , flat = \__mriseq_f:n {#2} ,
+        ramp = \__mriseq_f:n { \l__mriseq_p_ramp_fp } , amp = \__mriseq_f:n {#3} ,
+        split = \__mriseq_f:n {#1} }
+  }
+\cs_new_protected:Npn \__mriseq_q_lobe:nnn #1#2#3
+  % row, start, area   (lobe fills the prephaser window)
+  {
+    \__mriseq_push:nne { grad } {#1}
+      { start = \__mriseq_f:n {#2} ,
+        flat = \__mriseq_f:n { \l__mriseq_p_prep_fp - 2 * \l__mriseq_p_ramp_fp } ,
+        ramp = \__mriseq_f:n { \l__mriseq_p_ramp_fp } , area = \__mriseq_f:n {#3} }
+  }
+\cs_new_protected:Npn \__mriseq_q_ptable:nn #1#2
+  { \__mriseq_q_ptable:nnV {#1} {#2} \l__mriseq_q_hl_tl }
+\cs_new_protected:Npn \__mriseq_q_ptable:nnn #1#2#3
+  % start, sign (1 encode, -1 rewind), highlight
+  {
+    \__mriseq_push:nne { ptable } { gy }
+      {
+        start = \__mriseq_f:n {#1} ,
+        flat = \__mriseq_f:n { \l__mriseq_p_prep_fp - 2 * \l__mriseq_p_ramp_fp } ,
+        ramp = \__mriseq_f:n { \l__mriseq_p_ramp_fp } , area = \__mriseq_f:n { \l__mriseq_q_ape_fp } ,
+        lines = \l__mriseq_p_lines_tl ,
+        arrow = \fp_compare:nNnTF {#2} > { 0 } { down } { up } ,
+        \tl_if_blank:nF {#3}
+          { highlight = \fp_eval:n { (#2) * (#3) } }
+      }
+  }
+\cs_generate_variant:Nn \__mriseq_q_ptable:nnn { nnV }
+\cs_new_protected:Npn \__mriseq_q_rf:nnnnn #1#2#3#4#5
+  % centre, dur, flip, role, phase
+  {
+    \__mriseq_push:nne { rf } { rf }
+      {
+        center = \__mriseq_f:n {#1} , dur = \__mriseq_f:n {#2} , flip = #3 , role = #4 ,
+        tbw = \__mriseq_f:n { \l__mriseq_p_tbw_fp } ,
+        \bool_lazy_and:nnT { \str_if_eq_p:nn {#4} { excite } }
+          { ! \tl_if_blank_p:V \l__mriseq_p_fliplabel_tl }
+          { label = { \exp_not:V \l__mriseq_p_fliplabel_tl } , }
+        \tl_if_blank:eF {#5} { phase = {#5} , }
+      }
+    \bool_if:NT \l__mriseq_p_pmarkers_bool
+      { \__mriseq_push:nne { marker } { } { at = \__mriseq_f:n {#1} , kind = #4 } }
+  }
+\cs_new_protected:Npn \__mriseq_q_readout:nn #1#2
+  % echo time, echo label
+  {
+    \__mriseq_push:nne { grad } { gx }
+      { center = \__mriseq_f:n {#1} , flat = \__mriseq_f:n { \l__mriseq_q_tacq_fp } ,
+        ramp = \__mriseq_f:n { \l__mriseq_p_ramp_fp } , amp = \__mriseq_f:n { \l__mriseq_q_gro_fp } ,
+        split = \__mriseq_f:n {#1} }
+    \__mriseq_push:nne { adc } { adc }
+      { center = \__mriseq_f:n {#1} , samples = \fp_eval:n { \l__mriseq_p_nread_fp } ,
+        dwell = \__mriseq_f:n { \l__mriseq_p_dwell_fp } , kzero = \__mriseq_f:n {#1} }
+    \bool_if:NT \l__mriseq_p_emarker_bool
+      {
+        \__mriseq_push:nne { marker } { }
+          { at = \__mriseq_f:n {#1} , kind = echo , label = { \exp_not:n {#2} } }
+      }
+  }
+\cs_new_protected:Npn \__mriseq_q_interval:nnnn #1#2#3#4
+  % key in annotate list, from, to, label
+  {
+    \clist_if_in:NnT \l__mriseq_p_annotate_clist {#1}
+      {
+        \int_incr:N \l__mriseq_q_level_int
+        \__mriseq_q_interval_at:nnnnn {#1} { \int_use:N \l__mriseq_q_level_int } {#2} {#3} {#4}
+      }
+  }
+\cs_new_protected:Npn \__mriseq_q_interval_at:nnnnn #1#2#3#4#5
+  % key, level, from, to, label
+  {
+        \__mriseq_push:nne { interval } { }
+          {
+            from = \__mriseq_f:n {#3} , to = \__mriseq_f:n {#4} ,
+            level = #2 ,
+            label =
+              {
+                \exp_not:n {#5}
+                \bool_if:NT \l__mriseq_amplabels_bool
+                  { \exp_not:N \, = \exp_not:N \, \__mriseq_num:n { (#4) - (#3) } \exp_not:N \, ms }
+              }
+          }
+  }
+
+% ---- Mz evolution ---------------------------------------------------------
+%  events: clist of  time/flip  ;  #2 = end time
+\cs_new_protected:Npn \__mriseq_q_mz:nn #1#2
+  { \clist_if_in:NnT \l__mriseq_rows_clist { mz } { \__mriseq_q_mz_do:nn {#1} {#2} } }
+\cs_new_protected:Npn \__mriseq_q_mz_do:nn #1#2
+  {
+    \tl_clear:N \l__mriseq_q_mz_tl
+    \fp_set:Nn \l__mriseq_tmpa_fp { 1 }                 % current Mz
+    \fp_set:Nn \l__mriseq_tmpb_fp { \l__mriseq_p_lead_fp - 0.3 } % current time
+    \tl_put_right:Ne \l__mriseq_q_mz_tl { \__mriseq_f:n { \l__mriseq_tmpb_fp } / 1 }
+    \tl_set:Ne \l__mriseq_tmp_tl {#1}
+    \exp_args:NV \clist_map_inline:nn \l__mriseq_tmp_tl { \__mriseq_q_mz_event:w ##1 \q_stop }
+    \__mriseq_q_mz_segment:n {#2}
+    \__mriseq_push:nne { wave } { mz }
+      { filled = false , occupy = false , group = mz , points = { \exp_not:V \l__mriseq_q_mz_tl } }
+  }
+\cs_new_protected:Npn \__mriseq_q_mz_segment:n #1
+  {
+    \int_step_inline:nn { 24 }
+      {
+        \fp_set:Nn \l__mriseq_tmpc_fp
+          { \l__mriseq_tmpb_fp + ##1 / 24 * ( (#1) - \l__mriseq_tmpb_fp ) }
+        \tl_put_right:Ne \l__mriseq_q_mz_tl
+          {
+            , \__mriseq_f:n { \l__mriseq_tmpc_fp } /
+            \__mriseq_f:n { 1 - ( 1 - \l__mriseq_tmpa_fp )
+                            * exp( - ( \l__mriseq_tmpc_fp - \l__mriseq_tmpb_fp ) / \l__mriseq_p_tone_fp ) }
+          }
+      }
+    \fp_set:Nn \l__mriseq_tmpa_fp
+      { 1 - ( 1 - \l__mriseq_tmpa_fp ) * exp( - ( (#1) - \l__mriseq_tmpb_fp ) / \l__mriseq_p_tone_fp ) }
+    \fp_set:Nn \l__mriseq_tmpb_fp {#1}
+  }
+\cs_new_protected:Npn \__mriseq_q_mz_event:w #1 / #2 \q_stop
+  {
+    \__mriseq_q_mz_segment:n {#1}
+    \fp_set:Nn \l__mriseq_tmpa_fp { \l__mriseq_tmpa_fp * cosd(#2) }
+    \tl_put_right:Ne \l__mriseq_q_mz_tl
+      { , \__mriseq_f:n {#1} / \__mriseq_f:n { \l__mriseq_tmpa_fp } }
+  }
+
+% ---- refocusing pulse with slice gradient and crushers ------------------
+\cs_new_protected:Npn \__mriseq_q_crushers:n #1
+  {
+    \bool_if:NT \l__mriseq_p_crushers_bool
+      {
+        \__mriseq_push:nne { grad } { gz }
+          { end = \__mriseq_f:n { #1 - \l__mriseq_p_refdur_fp / 2 - \l__mriseq_p_ramp_fp } ,
+            dur = \__mriseq_f:n { \l__mriseq_p_crushdur_fp } , ramp = \__mriseq_f:n { \l__mriseq_p_ramp_fp } ,
+            amp = \__mriseq_f:n { \l__mriseq_q_gref_fp } , amp~labels = false , area~labels = false }
+        \__mriseq_push:nne { grad } { gz }
+          { start = \__mriseq_f:n { #1 + \l__mriseq_p_refdur_fp / 2 + \l__mriseq_p_ramp_fp } ,
+            dur = \__mriseq_f:n { \l__mriseq_p_crushdur_fp } , ramp = \__mriseq_f:n { \l__mriseq_p_ramp_fp } ,
+            amp = \__mriseq_f:n { \l__mriseq_q_gref_fp } , amp~labels = false , area~labels = false }
+      }
+  }
+\cs_new_protected:Npn \__mriseq_q_refocus:n #1
+  {
+    \__mriseq_q_rf:nnnnn {#1} { \l__mriseq_p_refdur_fp } { 180 } { refocus }
+      { \l__mriseq_p_refphase_tl }
+    \__mriseq_q_slice_grad:nnn {#1} { \l__mriseq_p_refdur_fp } { \l__mriseq_q_gref_fp }
+    \__mriseq_q_crushers:n {#1}
+    \__mriseq_q_event:nn {#1} { 180 }
+  }
+\cs_new_protected:Npn \__mriseq_q_event:nn #1#2
+  { \tl_put_right:Ne \l__mriseq_q_events_tl { , \__mriseq_f:n {#1} / \fp_eval:n {#2} } }
+\cs_new_protected:Npn \__mriseq_q_end:n #1
+  { \fp_set:Nn \l__mriseq_q_end_fp { max( \l__mriseq_q_end_fp , #1 ) } }
+\cs_new:Npn \__mriseq_q_flip:n #1
+  { \tl_if_blank:VTF \l__mriseq_p_flip_tl {#1} { \l__mriseq_p_flip_tl } }
+\cs_new_protected:Npn \__mriseq_q_excite:n #1
+  % excitation pulse with slice gradient at #1 (default flip #2 in \l__mriseq_q_dflip_tl)
+  {
+    \__mriseq_q_rf:nnnnn {#1} { \l__mriseq_p_rfdur_fp }
+      { \__mriseq_q_flip:n { \l__mriseq_q_dflip_tl } } { excite } { \l__mriseq_p_excphase_tl }
+    \__mriseq_q_slice_grad:nnn {#1} { \l__mriseq_p_rfdur_fp } { \l__mriseq_q_gss_fp }
+    \__mriseq_q_event:nn {#1} { \__mriseq_q_flip:n { \l__mriseq_q_dflip_tl } }
+  }
+\tl_new:N \l__mriseq_q_dflip_tl
+
+% ---- diffusion weighting (Stejskal-Tanner, trapezoidal lobes) ------------
+%  b(delta) = gamma^2 G^2 [ delta^2 (Delta - delta/3) + eps^3/30 - delta eps^2/6 ]
+%  with Delta = delta + c, delta = flat + eps, solved for delta by bisection.
+\cs_new:Npn \__mriseq_q_bvalue:n #1
+  {
+    ( 2 * pi * 42.577478518e6 ) ^ 2 * ( \l__mriseq_p_damp_fp * 1e-3 ) ^ 2
+    * ( ( (#1) * 1e-3 ) ^ 2 * ( ( (#1) + \l__mriseq_tmpc_fp ) * 1e-3 - (#1) * 1e-3 / 3 )
+        + ( \l__mriseq_p_dramp_fp * 1e-3 ) ^ 3 / 30
+        - (#1) * 1e-3 * ( \l__mriseq_p_dramp_fp * 1e-3 ) ^ 2 / 6 ) * 1e-6
+  }
+\cs_new_protected:Npn \__mriseq_q_diff_prepare:
+  {
+    \fp_compare:nNnTF \l__mriseq_p_b_fp > { 0 }
+      {
+        % c = Delta - delta  (lobes placed right next to the refocusing block)
+        \fp_set:Nn \l__mriseq_tmpc_fp
+          { \l__mriseq_p_dramp_fp + \l__mriseq_p_refdur_fp + 2 * \l__mriseq_p_ramp_fp + 2 * \l__mriseq_q_x_fp }
+        \fp_set:Nn \l__mriseq_tmpa_fp { \l__mriseq_p_dramp_fp }
+        \fp_set:Nn \l__mriseq_tmpb_fp { 1000 }
+        \prg_replicate:nn { 45 }
+          {
+            \fp_compare:nNnTF
+              { \__mriseq_q_bvalue:n { ( \l__mriseq_tmpa_fp + \l__mriseq_tmpb_fp ) / 2 } }
+              < \l__mriseq_p_b_fp
+              { \fp_set:Nn \l__mriseq_tmpa_fp { ( \l__mriseq_tmpa_fp + \l__mriseq_tmpb_fp ) / 2 } }
+              { \fp_set:Nn \l__mriseq_tmpb_fp { ( \l__mriseq_tmpa_fp + \l__mriseq_tmpb_fp ) / 2 } }
+          }
+        \fp_set:Nn \l__mriseq_q_dflat_fp { max( 0 , \l__mriseq_tmpb_fp - \l__mriseq_p_dramp_fp ) }
+        \fp_set:Nn \l__mriseq_q_dl_fp { \l__mriseq_q_dflat_fp + 2 * \l__mriseq_p_dramp_fp }
+      }
+      { \fp_zero:N \l__mriseq_q_dl_fp }
+  }
+\cs_new_protected:Npn \__mriseq_q_diff_lobes:n #1
+  % #1 = centre of the refocusing pulse
+  {
+    \fp_compare:nNnT \l__mriseq_p_b_fp > { 0 }
+      {
+        \fp_set:Nn \l__mriseq_tmpa_fp
+          { #1 - \l__mriseq_p_refdur_fp / 2 - \l__mriseq_p_ramp_fp - \l__mriseq_q_x_fp - \l__mriseq_q_dl_fp }
+        \fp_set:Nn \l__mriseq_tmpb_fp
+          { #1 + \l__mriseq_p_refdur_fp / 2 + \l__mriseq_p_ramp_fp + \l__mriseq_q_x_fp }
+        \int_compare:nNnT \l__mriseq_q_rep_int = { 0 }
+          {
+            \fp_set_eq:NN \l__mriseq_q_dstart_fp \l__mriseq_tmpa_fp
+            \fp_set:Nn \l__mriseq_q_dsep_fp { \l__mriseq_tmpb_fp - \l__mriseq_tmpa_fp }
+          }
+        \clist_map_inline:Nn \l__mriseq_p_daxis_clist
+          {
+            \__mriseq_push:nne { grad } {##1}
+              {
+                start = \__mriseq_f:n { \l__mriseq_tmpa_fp } , flat = \__mriseq_f:n { \l__mriseq_q_dflat_fp } ,
+                ramp = \__mriseq_f:n { \l__mriseq_p_dramp_fp } ,
+                amp = \__mriseq_f:n { \l__mriseq_p_damp_fp / sqrt( \clist_count:N \l__mriseq_p_daxis_clist ) } ,
+                area~labels = false
+              }
+            \__mriseq_push:nne { grad } {##1}
+              {
+                start = \__mriseq_f:n { \l__mriseq_tmpb_fp } , flat = \__mriseq_f:n { \l__mriseq_q_dflat_fp } ,
+                ramp = \__mriseq_f:n { \l__mriseq_p_dramp_fp } ,
+                amp = \__mriseq_f:n { \l__mriseq_p_damp_fp / sqrt( \clist_count:N \l__mriseq_p_daxis_clist ) } ,
+                area~labels = false , amp~labels = false
+              }
+          }
+      }
+  }
+\cs_new_protected:Npn \__mriseq_q_diff_intervals:
+  {
+    \fp_compare:nNnT \l__mriseq_p_b_fp > { 0 }
+      {
+        \tl_set:Ne \l__mriseq_tmp_tl { \clist_item:Nn \l__mriseq_p_daxis_clist { 1 } }
+        \clist_if_in:NnT \l__mriseq_p_annotate_clist { Delta }
+          {
+            \__mriseq_push:nne { interval } { }
+              {
+                from = \__mriseq_f:n { \l__mriseq_q_dstart_fp } ,
+                to = \__mriseq_f:n { \l__mriseq_q_dstart_fp + \l__mriseq_q_dsep_fp } ,
+                pos = \l__mriseq_tmp_tl , height = 0.07 , guides = false ,
+                label = { \exp_not:V \l__mriseq_p_Deltalabel_tl
+                          \bool_if:NT \l__mriseq_amplabels_bool
+                            { \exp_not:N \, = \exp_not:N \, \__mriseq_num:n { \l__mriseq_q_dsep_fp } \exp_not:N \, ms } }
+              }
+          }
+        \clist_if_in:NnT \l__mriseq_p_annotate_clist { delta }
+          {
+            \__mriseq_push:nne { interval } { }
+              {
+                from = \__mriseq_f:n { \l__mriseq_q_dstart_fp } ,
+                to = \__mriseq_f:n { \l__mriseq_q_dstart_fp + \l__mriseq_q_dflat_fp + \l__mriseq_p_dramp_fp } ,
+                pos = \l__mriseq_tmp_tl , height = 0.33 , guides = false ,
+                label = { \exp_not:V \l__mriseq_p_deltalabel_tl
+                          \bool_if:NT \l__mriseq_amplabels_bool
+                            { \exp_not:N \, = \exp_not:N \, \__mriseq_num:n
+                                { \l__mriseq_q_dflat_fp + \l__mriseq_p_dramp_fp } \exp_not:N \, ms } }
+              }
+          }
+      }
+  }
+
+% ---- spin-echo module -----------------------------------------------------
+%  #1 = excitation centre.  Returns nothing; sets \l__mriseq_q_techo_fp.
+\cs_new_protected:Npn \__mriseq_q_se_module:n #1
+  {
+    \fp_set:Nn \l__mriseq_q_t_fp {#1}
+    \fp_set:Nn \l__mriseq_q_x_fp
+      { \bool_if:NTF \l__mriseq_p_crushers_bool { \l__mriseq_p_crushdur_fp } { 0 } }
+    \__mriseq_q_diff_prepare:
+    \__mriseq_q_resolve_te:n
+      {
+        2 * max(
+          \l__mriseq_p_rfdur_fp / 2 + \l__mriseq_p_ramp_fp + \l__mriseq_p_prep_fp
+            + \l__mriseq_q_x_fp + \l__mriseq_p_ramp_fp + \l__mriseq_p_refdur_fp / 2 + \l__mriseq_q_dl_fp ,
+          \l__mriseq_p_refdur_fp / 2 + \l__mriseq_p_ramp_fp + \l__mriseq_q_x_fp
+            + \l__mriseq_p_ramp_fp + \l__mriseq_q_tacq_fp / 2 + \l__mriseq_q_dl_fp )
+      }
+    \fp_set:Nn \l__mriseq_q_tref_fp { \l__mriseq_q_t_fp + \l__mriseq_q_te_fp / 2 }
+    \fp_set:Nn \l__mriseq_q_techo_fp { \l__mriseq_q_t_fp + \l__mriseq_q_te_fp }
+    \fp_set:Nn \l__mriseq_q_p_fp
+      { \l__mriseq_q_t_fp + \l__mriseq_p_rfdur_fp / 2 + \l__mriseq_p_ramp_fp }
+    % excitation
+    \__mriseq_q_excite:n { \l__mriseq_q_t_fp }
+    % prephasers
+    \__mriseq_q_lobe:nnn { gz } { \l__mriseq_q_p_fp }
+      { - \l__mriseq_q_gss_fp * ( \l__mriseq_p_rfdur_fp / 2 + \l__mriseq_p_ramp_fp / 2 ) }
+    \__mriseq_q_ptable:nn { \l__mriseq_q_p_fp } { 1 }
+    \__mriseq_q_lobe:nnn { gx } { \l__mriseq_q_p_fp }
+      { \l__mriseq_q_gro_fp * ( \l__mriseq_q_tacq_fp / 2 + \l__mriseq_p_ramp_fp / 2 ) }
+    % refocusing
+    \__mriseq_q_refocus:n { \l__mriseq_q_tref_fp }
+    \__mriseq_q_diff_lobes:n { \l__mriseq_q_tref_fp }
+    % readout
+    \__mriseq_q_readout:nn { \l__mriseq_q_techo_fp }
+      { \tl_if_blank:VTF \l__mriseq_p_echolabel_tl { SE } { \l__mriseq_p_echolabel_tl } }
+    % signal
+    \bool_if:NT \l__mriseq_p_signal_bool
+      {
+        \__mriseq_push:nne { fid } { sig }
+          {
+            start = \__mriseq_f:n { \l__mriseq_q_t_fp + \l__mriseq_p_rfdur_fp / 2 } ,
+            t2 = \__mriseq_f:n { \l__mriseq_p_fidtwo_fp } , cycles = 2 ,
+            dur = \__mriseq_f:n { min( 5 * \l__mriseq_p_fidtwo_fp ,
+                    \l__mriseq_q_tref_fp - \l__mriseq_p_refdur_fp / 2 - \l__mriseq_q_t_fp - \l__mriseq_p_rfdur_fp / 2 ) } ,
+            amp = \__mriseq_f:n { \l__mriseq_q_sig_fp
+                    * sind( \tl_if_blank:VTF \l__mriseq_p_flip_tl { 90 } { \l__mriseq_p_flip_tl } ) }
+          }
+        \__mriseq_push:nne { echo } { sig }
+          {
+            center = \__mriseq_f:n { \l__mriseq_q_techo_fp } ,
+            t2 = \__mriseq_f:n { \l__mriseq_q_tacq_fp / 7 } , cycles = 1.5 ,
+            dur = \__mriseq_f:n { \l__mriseq_q_tacq_fp * 1.1 } ,
+            amp = \__mriseq_f:n { \l__mriseq_q_sig_fp
+                    * sind( \tl_if_blank:VTF \l__mriseq_p_flip_tl { 90 } { \l__mriseq_p_flip_tl } )
+                    * exp( - \l__mriseq_q_te_fp / \l__mriseq_p_ttwo_fp
+                           - \l__mriseq_p_b_fp * \l__mriseq_p_diffusivity_fp ) }
+          }
+      }
+    \__mriseq_q_equal_areas:
+    \__mriseq_q_end:n
+      { \l__mriseq_q_techo_fp + \l__mriseq_q_tacq_fp / 2 + \l__mriseq_p_ramp_fp + 0.2 }
+  }
+
+% ---- gradient-echo module --------------------------------------------------
+\cs_new_protected:Npn \__mriseq_q_gre_module:n #1
+  {
+    \fp_set:Nn \l__mriseq_q_t_fp {#1}
+    \__mriseq_q_resolve_te:n
+      {
+        \l__mriseq_p_rfdur_fp / 2 + \l__mriseq_p_ramp_fp + \l__mriseq_p_prep_fp
+          + \l__mriseq_p_ramp_fp + \l__mriseq_q_tacq_fp / 2
+      }
+    \fp_set:Nn \l__mriseq_q_techo_fp { \l__mriseq_q_t_fp + \l__mriseq_q_te_fp }
+    \fp_set:Nn \l__mriseq_q_p_fp
+      { \l__mriseq_q_t_fp + \l__mriseq_p_rfdur_fp / 2 + \l__mriseq_p_ramp_fp }
+    \__mriseq_q_excite:n { \l__mriseq_q_t_fp }
+    \__mriseq_q_lobe:nnn { gz } { \l__mriseq_q_p_fp }
+      { - \l__mriseq_q_gss_fp * ( \l__mriseq_p_rfdur_fp / 2 + \l__mriseq_p_ramp_fp / 2 ) }
+    \__mriseq_q_ptable:nn { \l__mriseq_q_p_fp } { 1 }
+    \__mriseq_q_lobe:nnn { gx } { \l__mriseq_q_p_fp }
+      { - \l__mriseq_q_gro_fp * ( \l__mriseq_q_tacq_fp / 2 + \l__mriseq_p_ramp_fp / 2 ) }
+    \__mriseq_q_readout:nn { \l__mriseq_q_techo_fp }
+      { \tl_if_blank:VTF \l__mriseq_p_echolabel_tl { GE } { \l__mriseq_p_echolabel_tl } }
+    \fp_set:Nn \l__mriseq_q_x_fp
+      { \l__mriseq_q_techo_fp + \l__mriseq_q_tacq_fp / 2 + \l__mriseq_p_ramp_fp }
+    \bool_if:NT \l__mriseq_p_rewinder_bool
+      { \__mriseq_q_ptable:nn { \l__mriseq_q_x_fp } { -1 } }
+    \bool_if:NT \l__mriseq_p_spoiler_bool
+      {
+        \__mriseq_push:nne { grad } { gz }
+          { start = \__mriseq_f:n { \l__mriseq_q_x_fp } ,
+            dur = \__mriseq_f:n { \l__mriseq_p_spoildur_fp } , ramp = \__mriseq_f:n { \l__mriseq_p_ramp_fp } ,
+            amp = \__mriseq_f:n { \l__mriseq_q_gss_fp } }
+      }
+    \bool_if:NT \l__mriseq_p_signal_bool
+      {
+        \__mriseq_push:nne { fid } { sig }
+          {
+            start = \__mriseq_f:n { \l__mriseq_q_t_fp + \l__mriseq_p_rfdur_fp / 2 } ,
+            t2 = \__mriseq_f:n { \l__mriseq_p_fidtwo_fp } , cycles = 2 ,
+            dur = \__mriseq_f:n { min( 5 * \l__mriseq_p_fidtwo_fp ,
+                    \l__mriseq_q_p_fp + \l__mriseq_p_prep_fp - \l__mriseq_q_t_fp - \l__mriseq_p_rfdur_fp / 2 ) } ,
+            amp = \__mriseq_f:n { \l__mriseq_q_sig_fp * sind( \tl_if_blank:VTF \l__mriseq_p_flip_tl { 30 } { \l__mriseq_p_flip_tl } ) }
+          }
+        \__mriseq_push:nne { echo } { sig }
+          {
+            center = \__mriseq_f:n { \l__mriseq_q_techo_fp } ,
+            t2 = \__mriseq_f:n { \l__mriseq_q_tacq_fp / 7 } , cycles = 1.5 ,
+            dur = \__mriseq_f:n { \l__mriseq_q_tacq_fp * 1.1 } ,
+            amp = \__mriseq_f:n { \l__mriseq_q_sig_fp
+                    * sind( \tl_if_blank:VTF \l__mriseq_p_flip_tl { 30 } { \l__mriseq_p_flip_tl } )
+                    * exp( - \l__mriseq_q_te_fp / \l__mriseq_p_ttwostar_fp ) }
+          }
+      }
+    \__mriseq_q_equal_areas:
+    \__mriseq_q_end:n
+      {
+        \l__mriseq_q_x_fp + 0.2 + max( \bool_if:NTF \l__mriseq_p_spoiler_bool { \l__mriseq_p_spoildur_fp } { 0 } ,
+                                         \bool_if:NTF \l__mriseq_p_rewinder_bool { \l__mriseq_p_prep_fp } { 0 } )
+      }
+  }
+
+% ---- EPI module ----------------------------------------------------------
+\fp_new:N \l__mriseq_q_esp_fp
+\fp_new:N \l__mriseq_q_ts_fp
+\fp_new:N \l__mriseq_q_tc_fp
+\int_new:N \l__mriseq_q_ny_int
+\int_new:N \l__mriseq_q_nc_int
+\int_new:N \l__mriseq_q_shot_int
+\fp_new:N \l__mriseq_q_line_fp
+\cs_new_protected:Npn \__mriseq_q_epi_module:n #1
+  {
+    \fp_set:Nn \l__mriseq_q_t_fp {#1}
+    \fp_set:Nn \l__mriseq_q_esp_fp { \l__mriseq_q_tacq_fp + 2 * \l__mriseq_p_ramp_fp }
+    % lines per shot (segmented EPI), shot index of this repetition
+    \int_set:Nn \l__mriseq_q_ny_int
+      { \int_div_truncate:nn { \fp_eval:n { round( \l__mriseq_p_nphase_fp ) } } { \l__mriseq_p_shots_int } }
+    \int_set:Nn \l__mriseq_q_nc_int { \int_div_truncate:nn { \l__mriseq_q_ny_int } { 2 } }
+    \int_set:Nn \l__mriseq_q_shot_int
+      { \int_mod:nn { \l__mriseq_q_rep_int } { \l__mriseq_p_shots_int } }
+    \fp_set:Nn \l__mriseq_q_line_fp { 2 * \l__mriseq_q_ape_fp / \l__mriseq_p_nphase_fp }
+    \fp_compare:nNnT \l__mriseq_p_b_fp > { 0 } { \bool_set_true:N \l__mriseq_p_refocusing_bool }
+    % time from the start of the echo train to the centre of k-space
+    \fp_set:Nn \l__mriseq_q_tc_fp
+      { ( \int_use:N \l__mriseq_q_nc_int + 0.5 ) * \l__mriseq_q_esp_fp }
+    \fp_set:Nn \l__mriseq_q_x_fp
+      { \bool_if:NTF \l__mriseq_p_crushers_bool { \l__mriseq_p_crushdur_fp } { 0 } }
+    \fp_set:Nn \l__mriseq_q_p_fp
+      { \l__mriseq_q_t_fp + \l__mriseq_p_rfdur_fp / 2 + \l__mriseq_p_ramp_fp }
+    \bool_if:NTF \l__mriseq_p_refocusing_bool
+      {
+        \__mriseq_q_diff_prepare:
+        \__mriseq_q_resolve_te:n
+          {
+            2 * max(
+              \l__mriseq_p_rfdur_fp / 2 + \l__mriseq_p_ramp_fp + \l__mriseq_p_prep_fp
+                + \l__mriseq_q_x_fp + \l__mriseq_p_ramp_fp + \l__mriseq_p_refdur_fp / 2 + \l__mriseq_q_dl_fp ,
+              \l__mriseq_p_refdur_fp / 2 + \l__mriseq_p_ramp_fp + \l__mriseq_q_x_fp
+                + \l__mriseq_q_dl_fp + \l__mriseq_p_prep_fp + \l__mriseq_q_tc_fp )
+          }
+      }
+      {
+        \__mriseq_q_resolve_te:n
+          { \l__mriseq_p_rfdur_fp / 2 + \l__mriseq_p_ramp_fp + \l__mriseq_p_prep_fp + \l__mriseq_q_tc_fp }
+      }
+    \fp_set:Nn \l__mriseq_q_techo_fp { \l__mriseq_q_t_fp + \l__mriseq_q_te_fp }
+    \fp_set:Nn \l__mriseq_q_ts_fp { \l__mriseq_q_techo_fp - \l__mriseq_q_tc_fp }
+    % excitation and slice rephaser
+    \__mriseq_q_excite:n { \l__mriseq_q_t_fp }
+    \__mriseq_q_lobe:nnn { gz } { \l__mriseq_q_p_fp }
+      { - \l__mriseq_q_gss_fp * ( \l__mriseq_p_rfdur_fp / 2 + \l__mriseq_p_ramp_fp / 2 ) }
+    \bool_if:NT \l__mriseq_p_refocusing_bool
+      {
+        \fp_set:Nn \l__mriseq_q_tref_fp { \l__mriseq_q_t_fp + \l__mriseq_q_te_fp / 2 }
+        \__mriseq_q_refocus:n { \l__mriseq_q_tref_fp }
+        \__mriseq_q_diff_lobes:n { \l__mriseq_q_tref_fp }
+      }
+    % prephasers to the corner of k-space, just before the train
+    \__mriseq_q_lobe:nnn { gx } { \l__mriseq_q_ts_fp - \l__mriseq_p_prep_fp }
+      { - \l__mriseq_q_gro_fp * ( \l__mriseq_q_tacq_fp / 2 + \l__mriseq_p_ramp_fp / 2 ) }
+    \__mriseq_q_lobe:nnn { gy } { \l__mriseq_q_ts_fp - \l__mriseq_p_prep_fp }
+      { - \l__mriseq_q_ape_fp + \l__mriseq_q_shot_int * \l__mriseq_q_line_fp }
+    % echo train
+    \int_step_inline:nnn { 0 } { \l__mriseq_q_ny_int - 1 }
+      {
+        \fp_set:Nn \l__mriseq_tmpa_fp { \l__mriseq_q_ts_fp + ##1 * \l__mriseq_q_esp_fp }
+        \__mriseq_push:nne { grad } { gx }
+          {
+            start = \__mriseq_f:n { \l__mriseq_tmpa_fp } ,
+            flat = \__mriseq_f:n { \l__mriseq_q_tacq_fp } ,
+            ramp = \__mriseq_f:n { \l__mriseq_p_ramp_fp } ,
+            amp = \int_if_odd:nT {##1} { - } \__mriseq_f:n { \l__mriseq_q_gro_fp } ,
+            area~labels = false
+            \int_compare:nNnF {##1} = { 0 } { , values = false }
+          }
+        \__mriseq_push:nne { adc } { adc }
+          {
+            start = \__mriseq_f:n { \l__mriseq_tmpa_fp + \l__mriseq_p_ramp_fp } ,
+            dur = \__mriseq_f:n { \l__mriseq_q_tacq_fp } ,
+            samples = \fp_eval:n { \l__mriseq_p_nread_fp } ,
+            dwell = \__mriseq_f:n { \l__mriseq_p_dwell_fp } ,
+            sample~ticks = false , adc~labels = false
+            \int_compare:nNnT {##1} = { \l__mriseq_q_nc_int }
+              { , kzero = \__mriseq_f:n { \l__mriseq_q_techo_fp } }
+          }
+        \int_compare:nNnT {##1} < { \l__mriseq_q_ny_int - 1 }
+          {
+            \__mriseq_push:nne { grad } { gy }
+              {
+                center = \__mriseq_f:n { \l__mriseq_tmpa_fp + \l__mriseq_q_esp_fp } ,
+                flat = 0 , ramp = \__mriseq_f:n { \l__mriseq_p_ramp_fp } ,
+                area = \__mriseq_f:n { \l__mriseq_p_shots_int * \l__mriseq_q_line_fp }
+                \int_compare:nNnF {##1} = { 0 } { , values = false } , area~labels = false
+              }
+          }
+        \bool_if:NT \l__mriseq_p_signal_bool
+          {
+            \fp_set:Nn \l__mriseq_tmpb_fp { \l__mriseq_tmpa_fp + \l__mriseq_q_esp_fp / 2 }
+            \__mriseq_push:nne { echo } { sig }
+              {
+                center = \__mriseq_f:n { \l__mriseq_tmpb_fp } ,
+                t2 = \__mriseq_f:n { \l__mriseq_q_tacq_fp / 5 } , cycles = 0.8 , resolution = 14 ,
+                dur = \__mriseq_f:n { \l__mriseq_q_tacq_fp } ,
+                amp = \__mriseq_f:n
+                  {
+                    \l__mriseq_q_sig_fp * sind( \__mriseq_q_flip:n { 90 } )
+                    * exp( - ( \l__mriseq_q_shot_int + ##1 * \l__mriseq_p_shots_int - \l__mriseq_p_nphase_fp / 2 ) ^ 2
+                           / ( 0.04 * \l__mriseq_p_nphase_fp ^ 2 + 1 ) - \l__mriseq_p_b_fp * \l__mriseq_p_diffusivity_fp )
+                    * \bool_if:NTF \l__mriseq_p_refocusing_bool
+                        { exp( - \l__mriseq_q_te_fp / \l__mriseq_p_ttwo_fp
+                               - abs( \l__mriseq_tmpb_fp - \l__mriseq_q_techo_fp ) / \l__mriseq_p_ttwostar_fp ) }
+                        { exp( - ( \l__mriseq_tmpb_fp - \l__mriseq_q_t_fp ) / \l__mriseq_p_ttwostar_fp ) }
+                  }
+              }
+          }
+      }
+    \bool_if:NT \l__mriseq_p_emarker_bool
+      {
+        \__mriseq_push:nne { marker } { }
+          {
+            at = \__mriseq_f:n { \l__mriseq_q_techo_fp } , kind = echo ,
+            label = { \tl_if_blank:VTF \l__mriseq_p_echolabel_tl
+                        { \bool_if:NTF \l__mriseq_p_refocusing_bool { SE } { GE } }
+                        { \exp_not:V \l__mriseq_p_echolabel_tl } }
+          }
+      }
+    \bool_if:NT \l__mriseq_p_signal_bool
+      {
+        \__mriseq_push:nne { fid } { sig }
+          {
+            start = \__mriseq_f:n { \l__mriseq_q_t_fp + \l__mriseq_p_rfdur_fp / 2 } ,
+            t2 = \__mriseq_f:n { \l__mriseq_p_fidtwo_fp } , cycles = 2 ,
+            dur = \__mriseq_f:n { min( 5 * \l__mriseq_p_fidtwo_fp , \l__mriseq_p_prep_fp + \l__mriseq_p_ramp_fp ) } ,
+            amp = \__mriseq_f:n { \l__mriseq_q_sig_fp * sind( \__mriseq_q_flip:n { 90 } ) }
+          }
+      }
+    % echo spacing interval reference (centre line and the next one)
+    \fp_set:Nn \l__mriseq_q_tref_fp
+      { \bool_if:NTF \l__mriseq_p_refocusing_bool { \l__mriseq_q_tref_fp } { \l__mriseq_q_t_fp } }
+    \__mriseq_q_end:n
+      { \l__mriseq_q_ts_fp + \l__mriseq_q_ny_int * \l__mriseq_q_esp_fp + 0.2 }
+  }
+
+% ---- turbo spin-echo module ------------------------------------------------
+\int_new:N \l__mriseq_q_etl_int
+\int_new:N \l__mriseq_q_eff_int
+\cs_new_protected:Npn \__mriseq_q_tse_module:n #1
+  {
+    \fp_set:Nn \l__mriseq_q_t_fp {#1}
+    \int_set:Nn \l__mriseq_q_etl_int { \l__mriseq_p_etl_tl }
+    \str_if_eq:VnTF \l__mriseq_p_effecho_tl { auto }
+      { \int_set:Nn \l__mriseq_q_eff_int { \int_div_truncate:nn { \l__mriseq_q_etl_int + 1 } { 2 } } }
+      { \int_set:Nn \l__mriseq_q_eff_int { \l__mriseq_p_effecho_tl } }
+    \fp_set:Nn \l__mriseq_q_x_fp
+      { \bool_if:NTF \l__mriseq_p_crushers_bool { \l__mriseq_p_crushdur_fp } { 0 } }
+    \fp_set:Nn \l__mriseq_q_temin_fp
+      {
+        2 * max(
+          \l__mriseq_p_rfdur_fp / 2 + \l__mriseq_p_ramp_fp + \l__mriseq_p_prep_fp
+            + \l__mriseq_q_x_fp + \l__mriseq_p_ramp_fp + \l__mriseq_p_refdur_fp / 2 ,
+          \l__mriseq_p_refdur_fp / 2 + \l__mriseq_p_ramp_fp + \l__mriseq_q_x_fp
+            + \l__mriseq_p_prep_fp + \l__mriseq_p_ramp_fp + \l__mriseq_q_tacq_fp / 2 )
+      }
+    \str_if_eq:VnTF \l__mriseq_p_esp_tl { auto }
+      { \fp_set:Nn \l__mriseq_q_esp_fp { ceil( \l__mriseq_q_temin_fp - 1e-6 ) } }
+      {
+        \fp_set:Nn \l__mriseq_q_esp_fp { \l__mriseq_p_esp_tl }
+        \bool_lazy_and:nnT
+          { \int_compare_p:nNn \l__mriseq_q_rep_int = { 0 } }
+          { \fp_compare_p:nNn \l__mriseq_q_esp_fp < { \l__mriseq_q_temin_fp - 1e-6 } }
+          {
+            \msg_warning:nneee { mriseq } { te-too-short } { Echo~spacing }
+              { \fp_eval:n { \l__mriseq_q_esp_fp } } { \fp_eval:n { round( \l__mriseq_q_temin_fp , 2 ) } }
+          }
+      }
+    \fp_set:Nn \l__mriseq_q_te_fp { \l__mriseq_q_eff_int * \l__mriseq_q_esp_fp }
+    \fp_set:Nn \l__mriseq_q_techo_fp { \l__mriseq_q_t_fp + \l__mriseq_q_te_fp }
+    \fp_set:Nn \l__mriseq_q_p_fp
+      { \l__mriseq_q_t_fp + \l__mriseq_p_rfdur_fp / 2 + \l__mriseq_p_ramp_fp }
+    \__mriseq_q_excite:n { \l__mriseq_q_t_fp }
+    \__mriseq_q_lobe:nnn { gz } { \l__mriseq_q_p_fp }
+      { - \l__mriseq_q_gss_fp * ( \l__mriseq_p_rfdur_fp / 2 + \l__mriseq_p_ramp_fp / 2 ) }
+    \__mriseq_q_lobe:nnn { gx } { \l__mriseq_q_p_fp }
+      { \l__mriseq_q_gro_fp * ( \l__mriseq_q_tacq_fp / 2 + \l__mriseq_p_ramp_fp / 2 ) }
+    \int_step_inline:nn { \l__mriseq_q_etl_int }
+      {
+        \fp_set:Nn \l__mriseq_tmpa_fp
+          { \l__mriseq_q_t_fp + ( ##1 - 0.5 ) * \l__mriseq_q_esp_fp }  % refocusing pulse
+        \fp_set:Nn \l__mriseq_tmpb_fp
+          { \l__mriseq_q_t_fp + ##1 * \l__mriseq_q_esp_fp }            % echo
+        \__mriseq_q_refocus:n { \l__mriseq_tmpa_fp }
+        \tl_set:Ne \l__mriseq_q_hl_tl
+          {
+            \fp_eval:n
+              { max( -1 , min( 1 , - ( ##1 - \l__mriseq_q_eff_int ) * 2
+                                   / max( 1 , \l__mriseq_q_etl_int ) ) ) }
+          }
+        \__mriseq_q_ptable:nn
+          { \l__mriseq_tmpa_fp + \l__mriseq_p_refdur_fp / 2 + \l__mriseq_p_ramp_fp + \l__mriseq_q_x_fp } { 1 }
+        \__mriseq_q_readout:nn { \l__mriseq_tmpb_fp } { ##1 }
+        \__mriseq_q_ptable:nn
+          { \l__mriseq_tmpb_fp + \l__mriseq_q_tacq_fp / 2 + \l__mriseq_p_ramp_fp } { -1 }
+        \bool_if:NT \l__mriseq_p_signal_bool
+          {
+            \__mriseq_push:nne { echo } { sig }
+              {
+                center = \__mriseq_f:n { \l__mriseq_tmpb_fp } ,
+                t2 = \__mriseq_f:n { \l__mriseq_q_tacq_fp / 7 } , cycles = 1.5 ,
+                dur = \__mriseq_f:n { \l__mriseq_q_tacq_fp * 1.1 } ,
+                amp = \__mriseq_f:n { \l__mriseq_q_sig_fp * sind( \__mriseq_q_flip:n { 90 } )
+                        * exp( - ##1 * \l__mriseq_q_esp_fp / \l__mriseq_p_ttwo_fp ) }
+              }
+          }
+      }
+    \bool_if:NT \l__mriseq_p_signal_bool
+      {
+        \__mriseq_push:nne { fid } { sig }
+          {
+            start = \__mriseq_f:n { \l__mriseq_q_t_fp + \l__mriseq_p_rfdur_fp / 2 } ,
+            t2 = \__mriseq_f:n { \l__mriseq_p_fidtwo_fp } , cycles = 2 ,
+            dur = \__mriseq_f:n { min( 5 * \l__mriseq_p_fidtwo_fp ,
+                    \l__mriseq_q_esp_fp / 2 - \l__mriseq_p_refdur_fp / 2 - \l__mriseq_p_rfdur_fp / 2 ) } ,
+            amp = \__mriseq_f:n { \l__mriseq_q_sig_fp * sind( \__mriseq_q_flip:n { 90 } ) }
+          }
+      }
+    \__mriseq_q_end:n
+      { \l__mriseq_q_t_fp + \l__mriseq_q_etl_int * \l__mriseq_q_esp_fp
+        + \l__mriseq_q_tacq_fp / 2 + \l__mriseq_p_ramp_fp + \l__mriseq_p_prep_fp + 0.2 }
+  }
+
+% ---- inversion-recovery module ---------------------------------------------
+\cs_new_protected:Npn \__mriseq_q_ir_module:n #1
+  {
+    \fp_set:Nn \l__mriseq_q_tinv_fp {#1}
+    \__mriseq_q_rf:nnnnn { \l__mriseq_q_tinv_fp } { \l__mriseq_p_invdur_fp } { 180 } { invert } { }
+    \__mriseq_q_slice_grad:nnn { \l__mriseq_q_tinv_fp } { \l__mriseq_p_invdur_fp } { \l__mriseq_q_ginv_fp }
+    \__mriseq_q_event:nn { \l__mriseq_q_tinv_fp } { 180 }
+    \bool_if:NT \l__mriseq_p_invspoiler_bool
+      {
+        \__mriseq_push:nne { grad } { gz }
+          { start = \__mriseq_f:n { \l__mriseq_q_tinv_fp + \l__mriseq_p_invdur_fp / 2 + \l__mriseq_p_ramp_fp } ,
+            dur = \__mriseq_f:n { \l__mriseq_p_spoildur_fp } , ramp = \__mriseq_f:n { \l__mriseq_p_ramp_fp } ,
+            amp = \__mriseq_f:n { \l__mriseq_q_ginv_fp } }
+      }
+    \fp_set:Nn \l__mriseq_q_sig_fp
+      { 1 - 2 * exp( - (\l__mriseq_p_ti_tl) / \l__mriseq_p_tone_fp ) }
+    \str_if_eq:VnTF \l__mriseq_p_readout_tl { gre }
+      { \__mriseq_q_gre_module:n { \l__mriseq_q_tinv_fp + \l__mriseq_p_ti_tl } }
+      { \__mriseq_q_se_module:n { \l__mriseq_q_tinv_fp + \l__mriseq_p_ti_tl } }
+  }
+
+% ---- start of the next repetition -----------------------------------------
+\cs_new_protected:Npn \__mriseq_q_next_excitation:n #1
+  { \__mriseq_q_excite:n {#1} \__mriseq_q_end:n { #1 + \l__mriseq_p_rfdur_fp / 2 + \l__mriseq_p_ramp_fp + 0.2 } }
+\cs_new_protected:Npn \__mriseq_q_next_inversion:n #1
+  {
+    \__mriseq_q_rf:nnnnn {#1} { \l__mriseq_p_invdur_fp } { 180 } { invert } { }
+    \__mriseq_q_slice_grad:nnn {#1} { \l__mriseq_p_invdur_fp } { \l__mriseq_q_ginv_fp }
+    \__mriseq_q_event:nn {#1} { 180 }
+    \__mriseq_q_end:n { #1 + \l__mriseq_p_invdur_fp / 2 + \l__mriseq_p_ramp_fp + 0.2 }
+  }
+
+% ---- repetitions -----------------------------------------------------------
+\int_new:N \l__mriseq_q_rep_int
+\int_new:N \l__mriseq_p_reps_int
+\tl_new:N \l__mriseq_p_reps_tl
+\int_new:N \l__mriseq_p_shots_int
+\fp_new:N \l__mriseq_p_b_fp
+\fp_new:N \l__mriseq_p_damp_fp
+\fp_new:N \l__mriseq_p_dramp_fp
+\fp_new:N \l__mriseq_p_diffusivity_fp
+\clist_new:N \l__mriseq_p_daxis_clist
+\tl_new:N \l__mriseq_p_deltalabel_tl
+\tl_new:N \l__mriseq_p_Deltalabel_tl
+\fp_new:N \l__mriseq_q_dl_fp      % total duration of one diffusion lobe
+\fp_new:N \l__mriseq_q_dflat_fp
+\fp_new:N \l__mriseq_q_dstart_fp  % start of the first diffusion lobe (rep 0)
+\fp_new:N \l__mriseq_q_dsep_fp    % Delta
+\fp_new:N \l__mriseq_q_tzero_fp
+\tl_new:N \l__mriseq_q_events_tl
+\tl_new:N \l__mriseq_q_hl_tl
+\bool_new:N \l__mriseq_p_marktr_bool
+\bool_new:N \l__mriseq_p_refocusing_bool
+\tl_new:N \l__mriseq_p_etl_tl
+\tl_new:N \l__mriseq_p_esp_tl
+\tl_new:N \l__mriseq_p_effecho_tl
+\tl_new:N \l__mriseq_p_esplabel_tl
+\keys_define:nn { mriseq / seq }
+  {
+    repetitions .tl_set:N = \l__mriseq_p_reps_tl ,
+    repetitions .initial:n = auto ,
+    shots .int_set:N = \l__mriseq_p_shots_int ,
+    shots .initial:n = 1 ,
+    b .fp_set:N = \l__mriseq_p_b_fp ,
+    b .initial:n = 0 ,
+    diffusion~amp .fp_set:N = \l__mriseq_p_damp_fp ,
+    diffusion~amp .initial:n = 40 ,
+    diffusion~ramp .fp_set:N = \l__mriseq_p_dramp_fp ,
+    diffusion~ramp .initial:n = 0.3 ,
+    diffusion~axis .clist_set:N = \l__mriseq_p_daxis_clist ,
+    diffusion~axis .initial:n = gd ,
+    diffusivity .fp_set:N = \l__mriseq_p_diffusivity_fp ,
+    diffusivity .initial:n = 0.0008 ,
+    delta~label .tl_set:N = \l__mriseq_p_deltalabel_tl ,
+    Delta~label .tl_set:N = \l__mriseq_p_Deltalabel_tl ,
+    mark~TR .bool_set:N = \l__mriseq_p_marktr_bool ,
+    mark~TR .initial:n = true ,
+    refocusing .bool_set:N = \l__mriseq_p_refocusing_bool ,
+    echo~train~length .tl_set:N = \l__mriseq_p_etl_tl ,
+    echo~train~length .initial:n = 4 ,
+    ETL .tl_set:N = \l__mriseq_p_etl_tl ,
+    echo~spacing .tl_set:N = \l__mriseq_p_esp_tl ,
+    echo~spacing .initial:n = auto ,
+    ESP .tl_set:N = \l__mriseq_p_esp_tl ,
+    effective~echo .tl_set:N = \l__mriseq_p_effecho_tl ,
+    effective~echo .initial:n = auto ,
+    ESP~label .tl_set:N = \l__mriseq_p_esplabel_tl ,
+    ESP~label .initial:n = ESP ,
+  }
+
+%  highlighted phase-encoding step of the current repetition
+\cs_new_protected:Npn \__mriseq_q_set_hl:
+  {
+    \tl_set_eq:NN \l__mriseq_q_hl_tl \l__mriseq_p_highlight_tl
+    \int_compare:nNnT \l__mriseq_p_reps_int > { 1 }
+      {
+        \tl_set:Ne \l__mriseq_q_hl_tl
+          {
+            \fp_eval:n
+              {
+                max( -1 , ( \tl_if_blank:VTF \l__mriseq_p_highlight_tl { 1 } { \l__mriseq_p_highlight_tl } )
+                  - 2 * \int_use:N \l__mriseq_q_rep_int / max( 1 , \l__mriseq_p_lines_tl - 1 ) )
+              }
+          }
+      }
+  }
+\cs_new_protected:Npn \__mriseq_q_begin:n #1
+  % #1 = default flip angle
+  {
+    \__mriseq_q_common:
+    \clist_if_in:NnF \l__mriseq_rows_clist { sig } { \bool_set_false:N \l__mriseq_p_signal_bool }
+    \str_if_eq:VnTF \l__mriseq_p_reps_tl { auto }
+      {
+        \int_set:Nn \l__mriseq_p_reps_int
+          { \int_compare:nNnTF \l__mriseq_p_shots_int > { 1 } { 2 } { 1 } }
+      }
+      { \int_set:Nn \l__mriseq_p_reps_int { \l__mriseq_p_reps_tl } }
+    \tl_set:Nn \l__mriseq_q_dflip_tl {#1}
+    \int_zero:N \l__mriseq_q_level_int
+    \int_zero:N \l__mriseq_q_rep_int
+    \fp_zero:N \l__mriseq_q_off_fp
+    \tl_clear:N \l__mriseq_q_events_tl
+    \fp_set:Nn \l__mriseq_q_end_fp { -inf }
+    \__mriseq_q_set_hl:
+  }
+\fp_new:N \l__mriseq_q_off_fp
+%  #1 = module for one repetition, called with the start time
+%  #2 = code drawing the start of the next repetition at time ##1
+\cs_new_protected:Npn \__mriseq_q_repeat:NN #1#2
+  {
+    \bool_lazy_and:nnT
+      { \bool_lazy_or_p:nn { \int_compare_p:nNn \l__mriseq_p_reps_int > { 1 } } { \l__mriseq_p_showtr_bool } }
+      { \fp_compare_p:nNn { \l__mriseq_q_end_fp - \l__mriseq_q_tzero_fp } > { \l__mriseq_p_tr_tl } }
+      {
+        \msg_warning:nneee { mriseq } { te-too-short } { TR }
+          { \fp_eval:n { \l__mriseq_p_tr_tl } }
+          { \fp_eval:n { round( \l__mriseq_q_end_fp - \l__mriseq_q_tzero_fp , 2 ) } }
+      }
+    \int_step_inline:nnn { 1 } { \l__mriseq_p_reps_int - 1 }
+      {
+        \int_set:Nn \l__mriseq_q_rep_int {##1}
+        \__mriseq_q_set_hl:
+        #1 { \l__mriseq_q_tzero_fp + ##1 * ( \l__mriseq_p_tr_tl ) }
+      }
+    \bool_if:NT \l__mriseq_p_showtr_bool
+      { #2 { \l__mriseq_q_tzero_fp + \l__mriseq_p_reps_int * ( \l__mriseq_p_tr_tl ) } }
+    % TR intervals, all on one level
+    \bool_lazy_and:nnT
+      { \l__mriseq_p_marktr_bool }
+      { \bool_lazy_or_p:nn { \int_compare_p:nNn \l__mriseq_p_reps_int > { 1 } } { \l__mriseq_p_showtr_bool } }
+      {
+        \int_incr:N \l__mriseq_q_level_int
+        \int_step_inline:nnn { 1 }
+          { \l__mriseq_p_reps_int - 1 + \bool_if:NTF \l__mriseq_p_showtr_bool { 1 } { 0 } }
+          {
+            \__mriseq_q_interval_at:nnnnn { TR } { \int_use:N \l__mriseq_q_level_int }
+              { \l__mriseq_q_tzero_fp + ( ##1 - 1 ) * ( \l__mriseq_p_tr_tl ) }
+              { \l__mriseq_q_tzero_fp + ##1 * ( \l__mriseq_p_tr_tl ) }
+              { \exp_not:V \l__mriseq_p_trlabel_tl }
+          }
+      }
+    \__mriseq_q_mz:nn { \l__mriseq_q_events_tl } { \l__mriseq_q_end_fp }
+  }
+
+% ---- public builders -----------------------------------------------------
+\cs_new_protected:Npn \__mriseq_q_se:
+  {
+    \__mriseq_q_begin:n { 90 }
+    \fp_set:Nn \l__mriseq_q_tzero_fp
+      { \l__mriseq_p_lead_fp + \l__mriseq_p_ramp_fp + \l__mriseq_p_rfdur_fp / 2 }
+    \__mriseq_q_se_module:n { \l__mriseq_q_tzero_fp }
+    \__mriseq_q_interval:nnnn { TE/2 } { \l__mriseq_q_t_fp } { \l__mriseq_q_tref_fp }
+      { \exp_not:V \l__mriseq_p_tehalflabel_tl }
+    \__mriseq_q_interval:nnnn { TE } { \l__mriseq_q_t_fp } { \l__mriseq_q_techo_fp }
+      { \exp_not:V \l__mriseq_p_telabel_tl }
+    \__mriseq_q_diff_intervals:
+    \__mriseq_q_repeat:NN \__mriseq_q_se_module:n \__mriseq_q_next_excitation:n
+  }
+\cs_new_protected:Npn \__mriseq_q_gre:
+  {
+    \__mriseq_q_begin:n { 30 }
+    \fp_set:Nn \l__mriseq_q_tzero_fp
+      { \l__mriseq_p_lead_fp + \l__mriseq_p_ramp_fp + \l__mriseq_p_rfdur_fp / 2 }
+    \__mriseq_q_gre_module:n { \l__mriseq_q_tzero_fp }
+    \__mriseq_q_interval:nnnn { TE } { \l__mriseq_q_t_fp } { \l__mriseq_q_techo_fp }
+      { \exp_not:V \l__mriseq_p_telabel_tl }
+    \__mriseq_q_repeat:NN \__mriseq_q_gre_module:n \__mriseq_q_next_excitation:n
+  }
+\cs_new_protected:Npn \__mriseq_q_ir:
+  {
+    \__mriseq_q_begin:n
+      { \str_if_eq:VnTF \l__mriseq_p_readout_tl { gre } { 30 } { 90 } }
+    \fp_set:Nn \l__mriseq_q_tzero_fp
+      { \l__mriseq_p_lead_fp + \l__mriseq_p_ramp_fp + \l__mriseq_p_invdur_fp / 2 }
+    \__mriseq_q_ir_module:n { \l__mriseq_q_tzero_fp }
+    \__mriseq_q_interval:nnnn { TI } { \l__mriseq_q_tinv_fp } { \l__mriseq_q_t_fp }
+      { \exp_not:V \l__mriseq_p_tilabel_tl }
+    \int_compare:nNnT \l__mriseq_q_level_int > { 0 } { \int_decr:N \l__mriseq_q_level_int }
+    \__mriseq_q_interval:nnnn { TE } { \l__mriseq_q_t_fp } { \l__mriseq_q_techo_fp }
+      { \exp_not:V \l__mriseq_p_telabel_tl }
+    \__mriseq_q_repeat:NN \__mriseq_q_ir_module:n \__mriseq_q_next_inversion:n
+  }
+\cs_new_protected:Npn \__mriseq_q_epi:
+  {
+    \__mriseq_q_begin:n { 90 }
+    \fp_set:Nn \l__mriseq_q_tzero_fp
+      { \l__mriseq_p_lead_fp + \l__mriseq_p_ramp_fp + \l__mriseq_p_rfdur_fp / 2 }
+    \__mriseq_q_epi_module:n { \l__mriseq_q_tzero_fp }
+    \bool_lazy_or:nnT { \l__mriseq_p_refocusing_bool } { \fp_compare_p:nNn \l__mriseq_p_b_fp > { 0 } }
+      {
+        \__mriseq_q_interval:nnnn { TE/2 } { \l__mriseq_q_t_fp } { \l__mriseq_q_tref_fp }
+          { \exp_not:V \l__mriseq_p_tehalflabel_tl }
+      }
+    \__mriseq_q_interval:nnnn { ESP }
+      { \l__mriseq_q_techo_fp } { \l__mriseq_q_techo_fp + \l__mriseq_q_esp_fp }
+      { \exp_not:V \l__mriseq_p_esplabel_tl }
+    \__mriseq_q_interval:nnnn { train }
+      { \l__mriseq_q_ts_fp } { \l__mriseq_q_ts_fp + \l__mriseq_q_ny_int * \l__mriseq_q_esp_fp }
+      { echo~train }
+    \__mriseq_q_interval:nnnn { TE } { \l__mriseq_q_t_fp } { \l__mriseq_q_techo_fp }
+      { \exp_not:V \l__mriseq_p_telabel_tl }
+    \__mriseq_q_diff_intervals:
+    \__mriseq_q_repeat:NN \__mriseq_q_epi_module:n \__mriseq_q_next_excitation:n
+  }
+\cs_new_protected:Npn \__mriseq_q_tse:
+  {
+    \__mriseq_q_begin:n { 90 }
+    \fp_set:Nn \l__mriseq_q_tzero_fp
+      { \l__mriseq_p_lead_fp + \l__mriseq_p_ramp_fp + \l__mriseq_p_rfdur_fp / 2 }
+    \__mriseq_q_tse_module:n { \l__mriseq_q_tzero_fp }
+    \int_compare:nNnT \l__mriseq_q_etl_int > { 1 }
+      {
+        \__mriseq_q_interval:nnnn { ESP }
+          { \l__mriseq_q_t_fp + \l__mriseq_q_esp_fp } { \l__mriseq_q_t_fp + 2 * \l__mriseq_q_esp_fp }
+          { \exp_not:V \l__mriseq_p_esplabel_tl }
+      }
+    \__mriseq_q_interval:nnnn { TE } { \l__mriseq_q_t_fp } { \l__mriseq_q_techo_fp }
+      { \exp_not:V \l__mriseq_p_telabel_tl }
+    \__mriseq_q_repeat:NN \__mriseq_q_tse_module:n \__mriseq_q_next_excitation:n
+  }
+
+%  signal on/off is a sequence key with a sensible default
+\keys_define:nn { mriseq / seq }
+  {
+    signal .bool_set:N = \l__mriseq_p_signal_bool ,
+    signal .initial:n = true ,
+  }
+
+%  Default keys of the ready-made sequences (outside expl syntax because of
+%  the math in them).
+\ExplSyntaxOff
+\def\mriseq@defaults@se{annotate={TE/2,TE}}
+\def\mriseq@defaults@gre{annotate={TE}}
+\def\mriseq@defaults@ir{annotate={TI,TE}}
+\def\mriseq@defaults@epi{annotate={TE}, dwell=0.005, grad ramp=0.1, phase steps=16,
+  grad scale=row}
+\def\mriseq@defaults@dwse{annotate={TE,delta,Delta}, b=1000, grad scale=row,
+  rows={rf,gz,gy,gx,gd,sig}, delta label=$\delta$, Delta label=$\Delta$}
+\def\mriseq@defaults@dwepi{annotate={TE,delta,Delta}, dwell=0.005, grad ramp=0.1,
+  phase steps=16, grad scale=row, refocusing, b=1000,
+  rows={rf,gz,gy,gx,gd,sig}, delta label=$\delta$, Delta label=$\Delta$}
+\mriseqdefinerow{gd}{label=$G_{\mathrm{D}}$, sublabel=diffusion, group=grad,
+  height=1.5cm, baseline=0.6}
+\def\mriseq@defaults@tse{annotate={ESP,TE}, TE label={$\mathrm{TE}_{\mathrm{eff}}$}}
+\ExplSyntaxOn
+
+%  In-environment commands: \spinecho[<seq keys>] etc.
+\cs_new_protected:Npn \__mriseq_inenv:nnn #1#2#3
+  % #1 defaults, #2 builder, #3 keys  (diagram keys are ignored here)
+  {
+    \group_begin:
+      \tl_set:Ne \l__mriseq_tmp_tl { \exp_not:o {#1} , \exp_not:n {#3} }
+      \keys_set_known:nV { mriseq / seq } \l__mriseq_tmp_tl
+      #2
+    \group_end:
+  }
+\cs_generate_variant:Nn \keys_set_known:nn { nV }
+\NewDocumentCommand \__mriseq_u_se:w { O{} }
+  { \__mriseq_inenv:nnn { \mriseq@defaults@se } { \__mriseq_q_se: } {#1} \ignorespaces }
+\NewDocumentCommand \__mriseq_u_gre:w { O{} }
+  { \__mriseq_inenv:nnn { \mriseq@defaults@gre } { \__mriseq_q_gre: } {#1} \ignorespaces }
+\NewDocumentCommand \__mriseq_u_ir:w { O{} }
+  { \__mriseq_inenv:nnn { \mriseq@defaults@ir } { \__mriseq_q_ir: } {#1} \ignorespaces }
+\NewDocumentCommand \__mriseq_u_epi:w { O{} }
+  { \__mriseq_inenv:nnn { \mriseq@defaults@epi } { \__mriseq_q_epi: } {#1} \ignorespaces }
+\NewDocumentCommand \__mriseq_u_dwse:w { O{} }
+  { \__mriseq_inenv:nnn { \mriseq@defaults@dwse } { \__mriseq_q_se: } {#1} \ignorespaces }
+\NewDocumentCommand \__mriseq_u_dwepi:w { O{} }
+  { \__mriseq_inenv:nnn { \mriseq@defaults@dwepi } { \__mriseq_q_epi: } {#1} \ignorespaces }
+\NewDocumentCommand \__mriseq_u_tse:w { O{} }
+  { \__mriseq_inenv:nnn { \mriseq@defaults@tse } { \__mriseq_q_tse: } {#1} \ignorespaces }
+
+%  Stand-alone diagrams.  Keys of the sequence and of the diagram can be mixed.
+\cs_new_protected:Npn \__mriseq_standalone:nnn #1#2#3
+  % #1 defaults, #2 builder, #3 keys
+  {
+    \group_begin:
+      \tl_set:Ne \l__mriseq_tmp_tl { \exp_not:o {#1} , \exp_not:n {#3} }
+      \keys_set_known:nVN { mriseq / seq } \l__mriseq_tmp_tl \l__mriseq_unknown_clist
+      \clist_put_left:Nn \l__mriseq_unknown_clist { tmin = 0 }
+      \exp_args:NV \__mriseq_begin:n \l__mriseq_unknown_clist
+      #2
+      \__mriseq_end:
+    \group_end:
+  }
+\cs_generate_variant:Nn \keys_set_known:nnN { nV }
+\NewDocumentCommand \SpinEchoDiagram { O{} }
+  { \__mriseq_standalone:nnn { \mriseq@defaults@se } { \__mriseq_q_se: } {#1} }
+\NewDocumentCommand \GradientEchoDiagram { O{} }
+  { \__mriseq_standalone:nnn { \mriseq@defaults@gre } { \__mriseq_q_gre: } {#1} }
+\NewDocumentCommand \InversionRecoveryDiagram { O{} }
+  { \__mriseq_standalone:nnn { \mriseq@defaults@ir } { \__mriseq_q_ir: } {#1} }
+\NewDocumentCommand \EPIDiagram { O{} }
+  { \__mriseq_standalone:nnn { \mriseq@defaults@epi } { \__mriseq_q_epi: } {#1} }
+\NewDocumentCommand \DiffusionSpinEchoDiagram { O{} }
+  { \__mriseq_standalone:nnn { \mriseq@defaults@dwse } { \__mriseq_q_se: } {#1} }
+\NewDocumentCommand \DiffusionEPIDiagram { O{} }
+  { \__mriseq_standalone:nnn { \mriseq@defaults@dwepi } { \__mriseq_q_epi: } {#1} }
+\NewDocumentCommand \TurboSpinEchoDiagram { O{} }
+  { \__mriseq_standalone:nnn { \mriseq@defaults@tse } { \__mriseq_q_tse: } {#1} }
+
+% =========================================================================
+% 13. Package options and defaults
+% =========================================================================
+\keys_define:nn { mriseq / pkg }
+  {
+    style .code:n = \__mriseq_use_style:n {#1} ,
+    bw    .code:n = \__mriseq_use_style:n { bw } ,
+    bw    .value_forbidden:n = true ,
+    color .code:n = \__mriseq_use_style:n { color } ,
+    color .value_forbidden:n = true ,
+    grayscale .code:n = \__mriseq_use_style:n { grayscale } ,
+    grayscale .value_forbidden:n = true ,
+    schematic .code:n = \keys_set:nn { mriseq } { schematic } ,
+    schematic .value_forbidden:n = true ,
+    detailed .code:n = \keys_set:nn { mriseq } { detailed } ,
+    detailed .value_forbidden:n = true ,
+  }
+\__mriseq_use_style:n { color }
+\ProcessKeyOptions [ mriseq / pkg ]
+
+\endinput
