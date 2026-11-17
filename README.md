@@ -105,7 +105,7 @@ also builds the release zip in `build/`.
 This package, its documentation and its examples were developed with
 substantial assistance from a generative AI tool (Claude Code, by Anthropic),
 under the direction of the author. The author is responsible for the content.
-Please check the diagrams you publish, and report errors or physically wrong
+Please check the diagrams you use, and report errors or physically wrong
 results in the [issue tracker](https://github.com/Glindeb/mriseq/issues).
 
 ## Author and licence
