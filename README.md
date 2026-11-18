@@ -3,6 +3,9 @@
 `mriseq` draws MRI pulse sequence diagrams as vector graphics with TikZ,
 directly in your LaTeX document. The diagrams are physically consistent:
 timings and gradient amplitudes are computed from imaging parameters.
+The visual style is based on
+[mriSimGraphical](https://github.com/filip-szczepankiewicz/mriSimGraphical)
+by Filip Sz (Lund University).
 
 ![Spin echo](doc/images/spin-echo.png)
 
