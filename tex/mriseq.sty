@@ -1,7 +1,7 @@
 %% mriseq.sty -- MRI pulse sequence diagrams with TikZ
 %%
 %% Author:     Gabriel Lindeblad  (https://github.com/Glindeb/mriseq)
-%% Version:    0.3.0  (2026-11-17)
+%% Version:    0.4.0  (2026-11-19)
 %%
 %% Copyright (C) 2026 by Gabriel Lindeblad
 %%
@@ -23,7 +23,7 @@
 %%   and report errors at https://github.com/Glindeb/mriseq/issues.
 %%
 \NeedsTeXFormat{LaTeX2e}[2022-06-01]
-\ProvidesExplPackage{mriseq}{2026-11-17}{0.3.0}
+\ProvidesExplPackage{mriseq}{2026-11-19}{0.4.0}
   {MRI pulse sequence diagrams with TikZ}
 
 \RequirePackage{tikz}
@@ -3276,7 +3276,7 @@
     crusher~dur .initial:n = 0.8 ,
     spoiler     .bool_set:N = \l__mriseq_p_spoiler_bool ,
     inversion~spoiler .bool_set:N = \l__mriseq_p_invspoiler_bool ,
-    inversion~spoiler .initial:n = true ,
+    inversion~spoiler .initial:n = false ,
     spoiler~dur .fp_set:N = \l__mriseq_p_spoildur_fp ,
     spoiler~dur .initial:n = 1.4 ,
     rewinder    .bool_set:N = \l__mriseq_p_rewinder_bool ,

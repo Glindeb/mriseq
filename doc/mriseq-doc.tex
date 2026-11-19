@@ -25,9 +25,9 @@
 \newcommand\oarg[1]{\texttt{[}\meta{#1}\texttt{]}}
 
 \title{\pkg{mriseq}: MRI pulse sequence diagrams with Ti\emph{k}Z\\[2pt]
-  \large Version 0.3.0}
+  \large Version 0.4.0}
 \author{Gabriel Lindeblad\\\small\url{https://github.com/Glindeb/mriseq}}
-\date{2026-11-17}
+\date{2026-11-19}
 
 \begin{document}
 \sloppy
@@ -278,7 +278,7 @@ lead & 0.5 & time before the first gradient starts \\
 crushers & false & crusher gradients around the $180^\circ$ pulse (SE) \\
 crusher dur & 0.8 & duration of each crusher \\
 spoiler & false & spoiler gradient on $G_z$ after the read-out (GRE) \\
-inversion spoiler & true & spoiler after the inversion pulse (IR) \\
+inversion spoiler & false & spoiler after the inversion pulse (IR) \\
 spoiler dur & 1.4 & spoiler duration \\
 rewinder & false & phase rewinder after the read-out (GRE) \\
 phase lines & 9 & number of lines drawn in the phase-encoding table \\
@@ -750,6 +750,9 @@ is skipped):
 
 \section{Change log}
 \begin{description}
+\item[0.4.0 (2026-11-19)] The inversion-recovery $G_z$ spoiler gradient
+  is now disabled by default. It can still be enabled with
+  \texttt{inversion spoiler=true}.
 \item[0.3.0 (2026-11-17)] First public release: SE, GRE, IR, EPI
   (single/multi-shot, GRE/SE), TSE, diffusion SE and SE-EPI; repetitions and
   axis cut marks; $k(t)$ rows and $k$-space panel; area shading; label

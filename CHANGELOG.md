@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0 — 2026-11-19
+
+* Disabled the inversion-recovery `$G_z$` spoiler gradient by default.
+  It remains available with `inversion spoiler=true`.
+
 ## 0.3.0 — 2026-11-17
 
 First public release.

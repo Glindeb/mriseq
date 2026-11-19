@@ -1,5 +1,8 @@
-First public release of **mriseq**, a LaTeX/TikZ package for MRI pulse
-sequence diagrams.
+**mriseq 0.4.0** adds a correction to inversion-recovery diagrams.
+
+The `$G_z$` spoiler gradient placed directly after the inversion pulse is
+now disabled by default. Enable it explicitly with
+`inversion spoiler=true` when a spoiler is required.
 
 **Download:** `mriseq.sty` (put it next to your document or upload it to
 Overleaf), the manual `mriseq-doc.pdf`, or the complete zip.
